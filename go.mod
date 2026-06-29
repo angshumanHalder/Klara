@@ -3,8 +3,10 @@ module klara
 go 1.26.1
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/danielgatis/go-headless-term v1.0.9
 	github.com/hajimehoshi/ebiten/v2 v2.9.9
+	golang.org/x/image v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -20,7 +22,6 @@ require (
 	github.com/jezek/xgb v1.1.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/unilibs/uniwidth v0.1.0 // indirect
-	golang.org/x/image v0.43.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
