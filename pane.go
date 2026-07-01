@@ -16,6 +16,8 @@ type Pane struct {
 	PtyFile *os.File
 	Cmd     *exec.Cmd
 	Mutex   sync.RWMutex
+	Rows    int
+	Cols    int
 }
 
 func NewPane(id string, rows, cols int) (*Pane, error) {
@@ -33,7 +35,7 @@ func NewPane(id string, rows, cols int) (*Pane, error) {
 		return nil, err
 	}
 	term := headlessterm.New(headlessterm.WithSize(rows, cols))
-	p := &Pane{ID: id, Term: term, PtyFile: ptmx, Cmd: cmd}
+	p := &Pane{ID: id, Term: term, PtyFile: ptmx, Cmd: cmd, Rows: rows, Cols: cols}
 	go p.readLoop()
 	return p, nil
 }
