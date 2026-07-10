@@ -1,0 +1,14 @@
+[font]
+family = "JetBrains Mono"
+size = 14.0
+
+[window]
+opacity = 0.5
+blur = false
+width = 1024
+height = 768
+
+[theme]
+background = "#1e1e2e"
+foreground = "#cdd6f4"
+accent = "#fe640d"
