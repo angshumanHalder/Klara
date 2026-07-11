@@ -9,6 +9,8 @@ use winit::{
 use crate::config::Config;
 
 mod config;
+mod pane;
+mod terminal;
 
 struct App {
     config: Config,
