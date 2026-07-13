@@ -7,6 +7,13 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum CursorStyle {
+    Block,
+    Underline,
+    Bar,
+}
+
 #[derive(Debug, Clone)]
 pub struct Cell {
     pub ch: char,
@@ -32,6 +39,10 @@ pub struct Grid {
     pub cursor_col: usize,
     fg: Color,
     bg: Color,
+    alternate: Vec<Vec<Cell>>,
+    pub in_alternate: bool,
+    saved_cursor: (usize, usize),
+    pub cursor_style: CursorStyle,
 }
 
 impl Grid {
@@ -44,6 +55,10 @@ impl Grid {
             cursor_col: 0,
             fg: Color::Default,
             bg: Color::Default,
+            alternate: vec![vec![Cell::default(); cols]; rows],
+            in_alternate: false,
+            saved_cursor: (0, 0),
+            cursor_style: CursorStyle::Block,
         }
     }
 
@@ -111,6 +126,23 @@ impl Grid {
             }
             _ => {}
         }
+    }
+
+    fn enter_alternate_screen(&mut self) {
+        self.saved_cursor = (self.cursor_row, self.cursor_col);
+        std::mem::swap(&mut self.cells, &mut self.alternate);
+        for row in &mut self.cells {
+            row.fill(Cell::default());
+        }
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+        self.in_alternate = true;
+    }
+
+    fn leave_alternate_screen(&mut self) {
+        std::mem::swap(&mut self.cells, &mut self.alternate);
+        (self.cursor_row, self.cursor_col) = self.saved_cursor;
+        self.in_alternate = false;
     }
 
     fn apply_sgr(&mut self, params: &Params) {
@@ -184,18 +216,12 @@ impl Perform for Grid {
         }
     }
 
-    fn csi_dispatch(
-        &mut self,
-        params: &Params,
-        _intermediates: &[u8],
-        _ignore: bool,
-        action: char,
-    ) {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         let p: Vec<u16> = params.iter().map(|p| p[0]).collect();
         let p0 = p.first().copied().unwrap_or(0);
         let p1 = p.get(1).copied().unwrap_or(0);
         match action {
-            'A' => self.cursor_row = self.cursor_row.saturating_add(p0.max(1) as usize),
+            'A' => self.cursor_row = self.cursor_row.saturating_sub(p0.max(1) as usize),
             'B' => self.cursor_row = (self.cursor_row + p0.max(1) as usize).min(self.rows - 1),
             'C' => self.cursor_col = (self.cursor_col + p0.max(1) as usize).min(self.cols - 1),
             'D' => self.cursor_col = self.cursor_col.saturating_sub(p0.max(1) as usize),
@@ -207,6 +233,24 @@ impl Perform for Grid {
             'J' => self.erase_display(p0),
             'K' => self.erase_line(p0),
             'm' => self.apply_sgr(params),
+            'h' if intermediates == [b'?'] => {
+                if p0 == 1049 {
+                    self.enter_alternate_screen();
+                }
+            }
+            'l' if intermediates == [b'?'] => {
+                if p0 == 1049 {
+                    self.leave_alternate_screen();
+                }
+            }
+            'q' if intermediates == [b' '] => {
+                self.cursor_style = match p0 {
+                    0 | 1 | 2 => CursorStyle::Block,
+                    3 | 4 => CursorStyle::Underline,
+                    5 | 6 => CursorStyle::Bar,
+                    _ => CursorStyle::Block,
+                }
+            }
             _ => {}
         }
     }
@@ -295,5 +339,55 @@ mod test {
         grid.execute(0x0a);
         assert_eq!(grid.cell(0, 0).ch, 'B');
         assert_eq!(grid.cell(1, 0).ch, 'C');
+    }
+
+    #[test]
+    fn test_alternate_screen_switch() {
+        let mut grid = Grid::new(24, 80);
+        let mut parser = Parser::new();
+        grid.print('A');
+        assert_eq!(grid.cell(0, 0).ch, 'A');
+        for &b in b"\x1b[?1049h" {
+            parser.advance(&mut grid, b);
+        }
+        assert!(grid.in_alternate);
+        assert_eq!(grid.cell(0, 0).ch, ' ');
+        for &b in b"\x1b[?1049l" {
+            parser.advance(&mut grid, b);
+        }
+        assert!(!grid.in_alternate);
+        assert_eq!(grid.cell(0, 0).ch, 'A');
+    }
+
+    #[test]
+    fn test_alternate_screen_restores_cursor() {
+        let mut grid = Grid::new(24, 80);
+        let mut parser = Parser::new();
+        grid.cursor_row = 5;
+        grid.cursor_col = 10;
+        for &b in b"\x1b[?1049h" {
+            parser.advance(&mut grid, b);
+        }
+        assert_eq!(grid.cursor_row, 0);
+        assert_eq!(grid.cursor_col, 0);
+        for &b in b"\x1b[?1049l" {
+            parser.advance(&mut grid, b);
+        }
+        assert_eq!(grid.cursor_row, 5);
+        assert_eq!(grid.cursor_col, 10);
+    }
+
+    #[test]
+    fn test_decscusr_set_cursor_style() {
+        let mut grid = Grid::new(24, 80);
+        let mut parser = Parser::new();
+        for &b in b"\x1b[4 q" {
+            parser.advance(&mut grid, b);
+        }
+        assert_eq!(grid.cursor_style, CursorStyle::Underline);
+        for &b in b"\x1b[2 q" {
+            parser.advance(&mut grid, b);
+        }
+        assert_eq!(grid.cursor_style, CursorStyle::Block);
     }
 }
