@@ -9,6 +9,7 @@ use winit::{
 use crate::config::Config;
 
 mod config;
+pub mod layout;
 mod pane;
 mod terminal;
 
