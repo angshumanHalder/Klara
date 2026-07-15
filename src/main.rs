@@ -12,6 +12,7 @@ mod config;
 pub mod layout;
 mod pane;
 mod terminal;
+mod window;
 
 struct App {
     config: Config,
