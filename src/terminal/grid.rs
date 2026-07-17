@@ -43,6 +43,9 @@ pub struct Grid {
     pub in_alternate: bool,
     saved_cursor: (usize, usize),
     pub cursor_style: CursorStyle,
+    pub cursor_visible: bool,
+    pub application_cursor: bool,
+    pub sgr_mouse: bool,
 }
 
 impl Grid {
@@ -59,6 +62,9 @@ impl Grid {
             in_alternate: false,
             saved_cursor: (0, 0),
             cursor_style: CursorStyle::Block,
+            application_cursor: false,
+            sgr_mouse: false,
+            cursor_visible: true,
         }
     }
 
@@ -233,16 +239,20 @@ impl Perform for Grid {
             'J' => self.erase_display(p0),
             'K' => self.erase_line(p0),
             'm' => self.apply_sgr(params),
-            'h' if intermediates == [b'?'] => {
-                if p0 == 1049 {
-                    self.enter_alternate_screen();
-                }
-            }
-            'l' if intermediates == [b'?'] => {
-                if p0 == 1049 {
-                    self.leave_alternate_screen();
-                }
-            }
+            'h' if intermediates == [b'?'] => match p0 {
+                25 => self.cursor_visible = true,
+                1 => self.application_cursor = true,
+                1006 => self.sgr_mouse = true,
+                1049 => self.enter_alternate_screen(),
+                _ => {}
+            },
+            'l' if intermediates == [b'?'] => match p0 {
+                25 => self.cursor_visible = false,
+                1 => self.application_cursor = false,
+                1006 => self.sgr_mouse = false,
+                1049 => self.leave_alternate_screen(),
+                _ => {}
+            },
             'q' if intermediates == [b' '] => {
                 self.cursor_style = match p0 {
                     0 | 1 | 2 => CursorStyle::Block,

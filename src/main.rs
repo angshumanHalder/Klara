@@ -6,9 +6,14 @@ use winit::{
     window::Window,
 };
 
-use crate::config::Config;
+use crate::{
+    config::Config,
+    input::{Action, InputHandler},
+    window::WindowManager,
+};
 
 mod config;
+mod input;
 pub mod layout;
 mod pane;
 mod terminal;
@@ -18,6 +23,8 @@ struct App {
     config: Config,
     window: Option<std::sync::Arc<Window>>,
     surface_state: Option<SurfaceState>,
+    input: InputHandler,
+    wm: Option<WindowManager>,
 }
 
 struct SurfaceState {
@@ -33,6 +40,8 @@ impl App {
             config,
             window: None,
             surface_state: None,
+            input: InputHandler::new(),
+            wm: None,
         }
     }
 
@@ -87,6 +96,8 @@ impl ApplicationHandler for App {
 
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window).unwrap();
+        let size = self.window.as_ref().unwrap().inner_size();
+        self.wm = Some(WindowManager::new(size.width as f32, size.height as f32).unwrap());
 
         let (adapter, device, queue) = pollster::block_on(async {
             let adapter = instance
@@ -140,6 +151,29 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => self.render(),
+            WindowEvent::ModifiersChanged(mods) => self.input.modifiers = mods,
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let Some(wm) = self.wm.as_mut() {
+                    let app_cursor = wm
+                        .active
+                        .lock()
+                        .unwrap()
+                        .grid
+                        .lock()
+                        .unwrap()
+                        .application_cursor;
+                    match self.input.handle(&event, app_cursor) {
+                        Action::SendBytes(bytes) => wm.active.lock().unwrap().write_input(&bytes),
+                        Action::SplitVerticle => {
+                            wm.split_pane(layout::SplitDirection::Vertical).unwrap()
+                        }
+                        Action::SplitHorizontal => {
+                            wm.split_pane(layout::SplitDirection::Horizontal).unwrap()
+                        }
+                        Action::None => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
