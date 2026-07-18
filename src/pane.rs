@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use winit::window::Window;
 
 use crate::terminal::grid::Grid;
 
@@ -13,7 +14,12 @@ pub struct Pane {
 }
 
 impl Pane {
-    pub fn new(id: String, rows: usize, cols: usize) -> anyhow::Result<Self> {
+    pub fn new(
+        id: String,
+        rows: usize,
+        cols: usize,
+        window: Option<Arc<Window>>,
+    ) -> anyhow::Result<Self> {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
         let pty_stream = native_pty_system();
@@ -43,9 +49,17 @@ impl Pane {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        let mut g = grid_clone.lock().unwrap();
-                        for &byte in &buf[..n] {
-                            parser.advance(&mut *g, byte);
+                        let dirty = {
+                            let mut g = grid_clone.lock().unwrap();
+                            for &byte in &buf[..n] {
+                                parser.advance(&mut *g, byte);
+                            }
+                            g.dirty.iter().any(|&d| d)
+                        };
+                        if dirty {
+                            if let Some(w) = &window {
+                                w.request_redraw();
+                            }
                         }
                     }
                 }

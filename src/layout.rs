@@ -109,7 +109,9 @@ mod test {
     use std::sync::{Arc, Mutex};
 
     fn make_pane() -> Arc<Mutex<Pane>> {
-        Arc::new(Mutex::new(Pane::new("test".to_string(), 24, 80).unwrap()))
+        Arc::new(Mutex::new(
+            Pane::new("test".to_string(), 24, 80, None).unwrap(),
+        ))
     }
 
     #[test]

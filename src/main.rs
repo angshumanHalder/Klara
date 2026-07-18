@@ -1,4 +1,3 @@
-use anyhow::Result;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -6,18 +5,13 @@ use winit::{
     window::Window,
 };
 
-use crate::{
-    config::Config,
+use klara::{
+    config::{Config, ConfigError},
+    error::KlaraError,
     input::{Action, InputHandler},
+    layout, renderer,
     window::WindowManager,
 };
-
-mod config;
-mod input;
-pub mod layout;
-mod pane;
-mod terminal;
-mod window;
 
 struct App {
     config: Config,
@@ -25,6 +19,7 @@ struct App {
     surface_state: Option<SurfaceState>,
     input: InputHandler,
     wm: Option<WindowManager>,
+    renderer: Option<renderer::Renderer>,
 }
 
 struct SurfaceState {
@@ -42,6 +37,7 @@ impl App {
             surface_state: None,
             input: InputHandler::new(),
             wm: None,
+            renderer: None,
         }
     }
 
@@ -73,6 +69,10 @@ impl App {
                 ..Default::default()
             });
         }
+        if let (Some(renderer), Some(wm)) = (self.renderer.as_mut(), self.wm.as_ref()) {
+            let layouts = wm.pane_layouts();
+            renderer.draw(&state.device, &state.queue, &mut encoder, &view, &layouts);
+        }
         state.queue.submit([encoder.finish()]);
         frame.present();
     }
@@ -95,9 +95,12 @@ impl ApplicationHandler for App {
         self.window = Some(window.clone());
 
         let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(window).unwrap();
+        let surface = instance.create_surface(window.clone()).unwrap();
         let size = self.window.as_ref().unwrap().inner_size();
-        self.wm = Some(WindowManager::new(size.width as f32, size.height as f32).unwrap());
+        self.wm = Some(
+            WindowManager::new(size.width as f32, size.height as f32, Some(window.clone()))
+                .unwrap(),
+        );
 
         let (adapter, device, queue) = pollster::block_on(async {
             let adapter = instance
@@ -133,6 +136,16 @@ impl ApplicationHandler for App {
             queue,
             config: surface_config,
         });
+
+        self.renderer = Some(renderer::Renderer::new(
+            &self.surface_state.as_ref().unwrap().device,
+            &self.surface_state.as_ref().unwrap().queue,
+            self.surface_state.as_ref().unwrap().config.format,
+            size.width,
+            size.height,
+        ));
+
+        self.window.as_ref().unwrap().request_redraw();
     }
 
     fn window_event(
@@ -148,6 +161,12 @@ impl ApplicationHandler for App {
                     state.config.width = size.width;
                     state.config.height = size.height;
                     state.surface.configure(&state.device, &state.config);
+                    if let Some(r) = self.renderer.as_mut() {
+                        r.resize(&state.queue, size.width, size.height);
+                    }
+                }
+                if let Some(wm) = self.wm.as_mut() {
+                    wm.resize(size.width as f32, size.height as f32);
                 }
             }
             WindowEvent::RedrawRequested => self.render(),
@@ -179,9 +198,15 @@ impl ApplicationHandler for App {
     }
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<(), KlaraError> {
     env_logger::init();
-    let config = Config::load("config.toml").unwrap_or_else(|_| Config::default());
+    let config = match Config::load("config.toml") {
+        Ok(config) => config,
+        Err(ConfigError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Config::default()
+        }
+        Err(error) => return Err(error.into()),
+    };
     let event_loop = EventLoop::new()?;
     let mut app = App::new(config);
     event_loop.run_app(&mut app)?;

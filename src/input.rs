@@ -82,6 +82,7 @@ fn translate_key(event: &KeyEvent, ctrl: bool, app_cursor: bool) -> Vec<u8> {
         let seq: &[u8] = match named {
             NamedKey::Enter => b"\r",
             NamedKey::Backspace => b"\x7f",
+            NamedKey::Space => b" ",
             NamedKey::Tab => b"\t",
             NamedKey::Escape => b"\x1b",
             NamedKey::ArrowUp => {

@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
+use winit::window::Window;
+
 use crate::{
     layout::{LayoutNode, Rect, SplitDirection},
     pane::Pane,
@@ -28,10 +30,11 @@ pub struct WindowManager {
     pub active: Arc<Mutex<Pane>>,
     pub width: f32,
     pub height: f32,
+    window: Option<Arc<Window>>,
 }
 
 impl WindowManager {
-    pub fn new(width: f32, height: f32) -> anyhow::Result<Self> {
+    pub fn new(width: f32, height: f32, window: Option<Arc<Window>>) -> anyhow::Result<Self> {
         let content = Rect {
             x: 0.0,
             y: 0.0,
@@ -39,12 +42,18 @@ impl WindowManager {
             height: height - STATUS_BAR_HEIGHT,
         };
         let (rows, cols) = rect_to_grid(content);
-        let pane = Arc::new(Mutex::new(Pane::new(next_id(), rows, cols)?));
+        let pane = Arc::new(Mutex::new(Pane::new(
+            next_id(),
+            rows,
+            cols,
+            window.clone(),
+        )?));
         Ok(Self {
             root: LayoutNode::Leaf(Arc::clone(&pane)),
             active: pane,
             width,
             height,
+            window,
         })
     }
 
@@ -82,7 +91,12 @@ impl WindowManager {
         };
 
         let (rows, cols) = rect_to_grid(child_rect);
-        let new_pane = Arc::new(Mutex::new(Pane::new(next_id(), rows, cols)?));
+        let new_pane = Arc::new(Mutex::new(Pane::new(
+            next_id(),
+            rows,
+            cols,
+            self.window.clone(),
+        )?));
 
         let old_root =
             std::mem::replace(&mut self.root, LayoutNode::Leaf(Arc::clone(&self.active)));
@@ -103,13 +117,13 @@ mod test {
 
     #[test]
     fn test_new_creats_single_pane() {
-        let wm = WindowManager::new(800.0, 600.0).unwrap();
+        let wm = WindowManager::new(800.0, 600.0, None).unwrap();
         assert_eq!(wm.pane_layouts().len(), 1);
     }
 
     #[test]
     fn test_split_pane_vertical() {
-        let mut wm = WindowManager::new(800.0, 600.0).unwrap();
+        let mut wm = WindowManager::new(800.0, 600.0, None).unwrap();
         wm.split_pane(crate::layout::SplitDirection::Vertical)
             .unwrap();
         let layouts = wm.pane_layouts();

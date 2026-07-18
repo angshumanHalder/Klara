@@ -1,6 +1,6 @@
 use vte::{Params, Perform};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Color {
     Default,
     Indexed(u8),
@@ -14,7 +14,7 @@ pub enum CursorStyle {
     Bar,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
     pub ch: char,
     pub fg: Color,
@@ -46,6 +46,7 @@ pub struct Grid {
     pub cursor_visible: bool,
     pub application_cursor: bool,
     pub sgr_mouse: bool,
+    pub dirty: Vec<bool>,
 }
 
 impl Grid {
@@ -65,6 +66,7 @@ impl Grid {
             application_cursor: false,
             sgr_mouse: false,
             cursor_visible: true,
+            dirty: vec![true; rows],
         }
     }
 
@@ -78,7 +80,8 @@ impl Grid {
                 ch,
                 fg: self.fg.clone(),
                 bg: self.bg.clone(),
-            }
+            };
+            self.dirty[self.cursor_row] = true;
         }
         self.cursor_col += 1;
         if self.cursor_col >= self.cols {
@@ -94,6 +97,7 @@ impl Grid {
     fn scroll_up(&mut self) {
         self.cells.remove(0);
         self.cells.push(vec![Cell::default(); self.cols]);
+        self.dirty.fill(true);
     }
 
     fn erase_line(&mut self, mode: u16) {
@@ -104,6 +108,7 @@ impl Grid {
             2 => (0..self.cols).for_each(|c| self.cells[row][c] = Cell::default()),
             _ => {}
         }
+        self.dirty[row] = true;
     }
 
     fn erase_display(&mut self, mode: u16) {
@@ -111,17 +116,28 @@ impl Grid {
             0 => {
                 self.erase_line(0);
                 for r in (self.cursor_row + 1)..self.rows {
+                    let was_blank = self.cells[r].iter().all(|c| *c == Cell::default());
+                    if was_blank {
+                        continue;
+                    }
                     for c in 0..self.cols {
                         self.cells[r][c] = Cell::default();
                     }
+                    self.dirty[r] = true;
                 }
             }
             1 => {
                 for r in 0..self.cursor_row {
+                    let was_blank = self.cells[r].iter().all(|c| *c == Cell::default());
+                    if was_blank {
+                        continue;
+                    }
                     for c in 0..self.cols {
                         self.cells[r][c] = Cell::default();
                     }
+                    self.dirty[r] = true;
                 }
+                self.erase_line(1);
             }
             2 | 3 => {
                 for r in 0..self.rows {
@@ -129,6 +145,7 @@ impl Grid {
                         self.cells[r][c] = Cell::default();
                     }
                 }
+                self.dirty.fill(true);
             }
             _ => {}
         }
@@ -143,12 +160,14 @@ impl Grid {
         self.cursor_row = 0;
         self.cursor_col = 0;
         self.in_alternate = true;
+        self.dirty.fill(true);
     }
 
     fn leave_alternate_screen(&mut self) {
         std::mem::swap(&mut self.cells, &mut self.alternate);
         (self.cursor_row, self.cursor_col) = self.saved_cursor;
         self.in_alternate = false;
+        self.dirty.fill(true);
     }
 
     fn apply_sgr(&mut self, params: &Params) {
@@ -195,6 +214,7 @@ impl Grid {
                 _ => {}
             }
         }
+        self.dirty.fill(true);
     }
 }
 
