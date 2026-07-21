@@ -9,7 +9,9 @@ use klara::{
     config::{Config, ConfigError},
     error::KlaraError,
     input::{Action, InputHandler},
-    layout, renderer,
+    layout,
+    pane::PaneState,
+    renderer,
     window::WindowManager,
 };
 
@@ -157,16 +159,23 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
+
                 if let Some(state) = self.surface_state.as_mut() {
                     state.config.width = size.width;
                     state.config.height = size.height;
                     state.surface.configure(&state.device, &state.config);
+
                     if let Some(r) = self.renderer.as_mut() {
                         r.resize(&state.queue, size.width, size.height);
                     }
                 }
-                if let Some(wm) = self.wm.as_mut() {
-                    wm.resize(size.width as f32, size.height as f32);
+                if let Some(wm) = self.wm.as_mut()
+                    && let Err(error) = wm.resize(size.width as f32, size.height as f32)
+                {
+                    log::error!("failed to resize terminal panes: {error}");
                 }
             }
             WindowEvent::RedrawRequested => self.render(),
@@ -182,7 +191,19 @@ impl ApplicationHandler for App {
                         .unwrap()
                         .application_cursor;
                     match self.input.handle(&event, app_cursor) {
-                        Action::SendBytes(bytes) => wm.active.lock().unwrap().write_input(&bytes),
+                        Action::SendBytes(bytes) => match wm.active.lock() {
+                            Ok(mut pane) => {
+                                if let Err(error) = pane.write_input(&bytes) {
+                                    log::error!(
+                                        "failed to send input to pane {}: {error}",
+                                        pane.id
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                log::error!("active pane lock is poisoned: {error}")
+                            }
+                        },
                         Action::SplitVerticle => {
                             wm.split_pane(layout::SplitDirection::Vertical).unwrap()
                         }
@@ -194,6 +215,33 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &event_loop::ActiveEventLoop) {
+        let Some(wm) = self.wm.as_mut() else {
+            return;
+        };
+
+        match wm.poll_children() {
+            Ok(transitions) => {
+                for (pane_id, state) in transitions {
+                    match state {
+                        PaneState::Exited { code, success } => {
+                            log::info!(
+                                "pane {pane_id} exited with status code {code} (success: {success})"
+                            );
+                        }
+                        PaneState::Failed { message } => {
+                            log::error!("pane {pane_id} failed: {message}");
+                        }
+                        PaneState::Running => {}
+                    }
+                }
+            }
+            Err(error) => {
+                log::error!("failed to poll pane processes: {error}");
+            }
         }
     }
 }

@@ -1,3 +1,5 @@
+use super::TerminalError;
+
 use vte::{Params, Perform};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +70,35 @@ impl Grid {
             cursor_visible: true,
             dirty: vec![true; rows],
         }
+    }
+
+    pub fn resize(&mut self, new_rows: usize, new_cols: usize) -> Result<(), TerminalError> {
+        if new_rows == 0 || new_cols == 0 {
+            return Err(TerminalError::InvalidSize {
+                rows: new_rows,
+                cols: new_cols,
+            });
+        }
+
+        if new_rows == self.rows && new_cols == self.cols {
+            return Ok(());
+        }
+
+        resize_buffer(&mut self.cells, new_rows, new_cols);
+        resize_buffer(&mut self.alternate, new_rows, new_cols);
+
+        self.rows = new_rows;
+        self.cols = new_cols;
+
+        self.cursor_row = self.cursor_row.min(new_rows - 1);
+        self.cursor_col = self.cursor_col.min(new_cols - 1);
+
+        self.saved_cursor.0 = self.saved_cursor.0.min(new_rows - 1);
+        self.saved_cursor.1 = self.saved_cursor.1.min(new_cols - 1);
+
+        self.dirty = vec![true; new_rows];
+
+        Ok(())
     }
 
     pub fn cell(&self, row: usize, col: usize) -> &Cell {
@@ -216,6 +247,16 @@ impl Grid {
         }
         self.dirty.fill(true);
     }
+}
+
+fn resize_buffer(buffer: &mut Vec<Vec<Cell>>, new_rows: usize, new_cols: usize) {
+    buffer.truncate(new_rows);
+
+    for row in buffer.iter_mut() {
+        row.resize(new_cols, Cell::default());
+    }
+
+    buffer.resize_with(new_rows, || vec![Cell::default(); new_cols]);
 }
 
 impl Perform for Grid {
@@ -419,5 +460,102 @@ mod test {
             parser.advance(&mut grid, b);
         }
         assert_eq!(grid.cursor_style, CursorStyle::Block);
+    }
+
+    #[test]
+    fn resize_grows_grid_and_preserves_cells() {
+        let mut grid = Grid::new(2, 3);
+
+        grid.put_char('A');
+
+        grid.cursor_row = 1;
+        grid.cursor_col = 1;
+        grid.put_char('B');
+
+        grid.resize(4, 5).unwrap();
+
+        assert_eq!(grid.rows, 4);
+        assert_eq!(grid.cols, 5);
+        assert_eq!(grid.cell(0, 0).ch, 'A');
+        assert_eq!(grid.cell(1, 1).ch, 'B');
+        assert_eq!(grid.cell(3, 4), &Cell::default());
+        assert_eq!(grid.dirty, vec![true; 4]);
+    }
+
+    #[test]
+    fn resize_shrinks_grid_and_clamps_cursor() {
+        let mut grid = Grid::new(4, 5);
+        grid.cursor_row = 3;
+        grid.cursor_col = 4;
+
+        grid.resize(2, 3).unwrap();
+
+        assert_eq!(grid.rows, 2);
+        assert_eq!(grid.cols, 3);
+        assert_eq!(grid.cursor_row, 1);
+        assert_eq!(grid.cursor_col, 2);
+        assert_eq!(grid.dirty, vec![true; 2]);
+    }
+
+    #[test]
+    fn resize_preserves_visible_intersection_when_shrinking() {
+        let mut grid = Grid::new(3, 4);
+        grid.cursor_row = 1;
+        grid.cursor_col = 2;
+        grid.put_char('X');
+
+        grid.resize(2, 3).unwrap();
+
+        assert_eq!(grid.cell(1, 2).ch, 'X');
+    }
+
+    #[test]
+    fn resize_updates_primary_and_alternate_buffers() {
+        let mut grid = Grid::new(2, 3);
+        let mut parser = Parser::new();
+
+        grid.put_char('P');
+
+        for &byte in b"\x1b[?1049h" {
+            parser.advance(&mut grid, byte);
+        }
+
+        grid.put_char('A');
+        grid.resize(4, 5).unwrap();
+
+        assert_eq!(grid.rows, 4);
+        assert_eq!(grid.cols, 5);
+        assert_eq!(grid.cell(0, 0).ch, 'A');
+        assert_eq!(grid.cell(3, 4), &Cell::default());
+
+        for &byte in b"\x1b[?1049l" {
+            parser.advance(&mut grid, byte);
+        }
+
+        assert_eq!(grid.cell(0, 0).ch, 'P');
+        assert_eq!(grid.cell(3, 4), &Cell::default());
+    }
+
+    #[test]
+    fn resize_rejects_zero_dimensions_without_mutating_grid() {
+        let mut grid = Grid::new(2, 3);
+        grid.put_char('A');
+
+        let error = grid.resize(0, 3).unwrap_err();
+
+        assert_eq!(error, TerminalError::InvalidSize { rows: 0, cols: 3 });
+        assert_eq!(grid.rows, 2);
+        assert_eq!(grid.cols, 3);
+        assert_eq!(grid.cell(0, 0).ch, 'A');
+    }
+
+    #[test]
+    fn resizing_to_same_dimensions_is_a_noop() {
+        let mut grid = Grid::new(2, 3);
+        grid.dirty.fill(false);
+
+        grid.resize(2, 3).unwrap();
+
+        assert_eq!(grid.dirty, vec![false; 2]);
     }
 }
