@@ -36,6 +36,12 @@ pub enum PaneError {
 
     #[error("pane lifecycle state lock is poisoned")]
     LifecycleStatePoisoned,
+
+    #[error("pane process is no longer available")]
+    ProcessUnavailable,
+
+    #[error("pane is not running")]
+    NotRunning,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,8 +58,8 @@ pub struct Pane {
     pub cols: usize,
 
     master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
-    writer: Box<dyn Write + Send>,
+    child: Option<Box<dyn Child + Send + Sync>>,
+    writer: Option<Box<dyn Write + Send>>,
     state: Arc<Mutex<PaneState>>,
 }
 
@@ -111,18 +117,23 @@ impl Pane {
             rows,
             cols,
             master: pair.master,
-            child,
-            writer,
+            child: Some(child),
+            writer: Some(writer),
             state,
         })
     }
 
     pub fn write_input(&mut self, data: &[u8]) -> Result<(), PaneError> {
-        self.writer
+        if self.state()? != PaneState::Running {
+            return Err(PaneError::NotRunning);
+        }
+
+        let writer = self.writer.as_mut().ok_or(PaneError::ProcessUnavailable)?;
+        writer
             .write_all(data)
             .map_err(|source| PaneError::WriteInput { source })?;
 
-        self.writer
+        writer
             .flush()
             .map_err(|source| PaneError::WriteInput { source })
     }
@@ -161,7 +172,9 @@ impl Pane {
             return Ok(current_state);
         }
 
-        let exit_status = self.child.try_wait().map_err(|source| PaneError::Pty {
+        let child = self.child.as_mut().ok_or(PaneError::ProcessUnavailable)?;
+
+        let exit_status = child.try_wait().map_err(|source| PaneError::Pty {
             operation: "poll child process",
             source: source.into(),
         })?;
@@ -194,7 +207,55 @@ impl Pane {
     }
 
     pub fn process_id(&self) -> Option<u32> {
-        self.child.process_id()
+        self.child.as_ref().and_then(|child| child.process_id())
+    }
+
+    pub fn shutdown(&mut self) -> Result<PaneState, PaneError> {
+        let current_state = self.state()?;
+
+        self.writer.take();
+
+        if matches!(current_state, PaneState::Exited { .. }) {
+            self.child.take();
+            return Ok(current_state);
+        }
+
+        let child = self.child.as_mut().ok_or(PaneError::ProcessUnavailable)?;
+
+        let status = match child.try_wait().map_err(|source| PaneError::Pty {
+            operation: "poll child process during shutdown",
+            source: source.into(),
+        })? {
+            Some(status) => status,
+            None => {
+                child.kill().map_err(|source| PaneError::Pty {
+                    operation: "terminate child process",
+                    source: source.into(),
+                })?;
+                child.wait().map_err(|source| PaneError::Pty {
+                    operation: "reap child process",
+                    source: source.into(),
+                })?
+            }
+        };
+
+        let next_state = PaneState::Exited {
+            code: status.exit_code(),
+            success: status.success(),
+        };
+
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| PaneError::LifecycleStatePoisoned)?;
+
+            *state = next_state.clone();
+        }
+
+        self.child.take();
+
+        Ok(next_state)
     }
 }
 
@@ -302,10 +363,20 @@ mod test {
     }
 
     #[test]
-    fn newly_created_pane_is_running() {
-        let pane = Pane::new("test".into(), 24, 80, None).unwrap();
+    fn newly_created_pane_can_be_shutdown() {
+        let mut pane = Pane::new("test".into(), 24, 80, None).unwrap();
 
         assert_eq!(pane.state().unwrap(), PaneState::Running);
         assert!(pane.process_id().is_some());
+
+        let state = pane.shutdown().unwrap();
+
+        assert!(matches!(state, PaneState::Exited { .. }));
+        assert_eq!(pane.state().unwrap(), state);
+        assert!(pane.process_id().is_none());
+        assert!(matches!(
+            pane.write_input(b"test"),
+            Err(PaneError::NotRunning)
+        ));
     }
 }

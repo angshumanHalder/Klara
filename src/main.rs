@@ -157,7 +157,14 @@ impl ApplicationHandler for App {
         event: winit::event::WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                if let Some(win_mgr) = self.wm.as_mut()
+                    && let Err(error) = win_mgr.shutdown_all()
+                {
+                    log::error!("failed to shutdown terminal panes: {error}")
+                }
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 if size.width == 0 || size.height == 0 {
                     return;

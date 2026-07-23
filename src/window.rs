@@ -152,6 +152,30 @@ impl WindowManager {
 
         Ok(transitions)
     }
+
+    pub fn shutdown_all(&mut self) -> anyhow::Result<()> {
+        let mut failures = Vec::new();
+
+        for (pane, _) in self.pane_layouts() {
+            let mut pane = match pane.lock() {
+                Ok(pane) => pane,
+                Err(_) => {
+                    failures.push("pane lock is poisoned".to_string());
+                    continue;
+                }
+            };
+
+            if let Err(error) = pane.shutdown() {
+                failures.push(format!("pane {} failed to shutdown: {error}", pane.id));
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(failures.join("; ")))
+        }
+    }
 }
 
 #[cfg(test)]
