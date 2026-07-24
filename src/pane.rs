@@ -1,5 +1,9 @@
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use thiserror::Error;
@@ -42,6 +46,15 @@ pub enum PaneError {
 
     #[error("pane is not running")]
     NotRunning,
+
+    #[error("PTY master is no longer available")]
+    MasterUnavailable,
+
+    #[error("PTY reader did not stop within {timeout_ms} ms")]
+    ReaderShutdownTimeout { timeout_ms: u64 },
+
+    #[error("PTY reader thread panicked")]
+    ReaderThreadPanicked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,10 +70,18 @@ pub struct Pane {
     pub rows: usize,
     pub cols: usize,
 
-    master: Box<dyn MasterPty + Send>,
+    master: Option<Box<dyn MasterPty + Send>>,
     child: Option<Box<dyn Child + Send + Sync>>,
     writer: Option<Box<dyn Write + Send>>,
     state: Arc<Mutex<PaneState>>,
+
+    reader_task: Option<ReaderTask>,
+    shutting_down: Arc<AtomicBool>,
+}
+
+struct ReaderTask {
+    handle: JoinHandle<()>,
+    finished: Receiver<()>,
 }
 
 impl Pane {
@@ -108,18 +129,27 @@ impl Pane {
 
         let grid = Arc::new(Mutex::new(Grid::new(rows, cols)));
         let state = Arc::new(Mutex::new(PaneState::Running));
+        let shutting_down = Arc::new(AtomicBool::new(false));
 
-        spawn_reader(reader, Arc::clone(&grid), Arc::clone(&state), window);
+        let reader_task = spawn_reader(
+            reader,
+            Arc::clone(&grid),
+            Arc::clone(&state),
+            Arc::clone(&shutting_down),
+            window,
+        );
 
         Ok(Pane {
             id,
             grid,
             rows,
             cols,
-            master: pair.master,
+            master: Some(pair.master),
             child: Some(child),
             writer: Some(writer),
             state,
+            shutting_down,
+            reader_task: Some(reader_task),
         })
     }
 
@@ -147,10 +177,14 @@ impl Pane {
     ) -> Result<(), PaneError> {
         let size = pty_size(rows, cols, pixel_width, pixel_height)?;
 
-        self.master.resize(size).map_err(|source| PaneError::Pty {
-            operation: "resize PTY",
-            source,
-        })?;
+        self.master
+            .as_ref()
+            .ok_or(PaneError::MasterUnavailable)?
+            .resize(size)
+            .map_err(|source| PaneError::Pty {
+                operation: "resize PTY",
+                source,
+            })?;
 
         let mut grid = self
             .grid
@@ -211,12 +245,16 @@ impl Pane {
     }
 
     pub fn shutdown(&mut self) -> Result<PaneState, PaneError> {
+        self.shutting_down.store(true, Ordering::Release);
         let current_state = self.state()?;
 
         self.writer.take();
 
         if matches!(current_state, PaneState::Exited { .. }) {
             self.child.take();
+            self.master.take();
+            self.finish_reader(Duration::from_secs(1))?;
+
             return Ok(current_state);
         }
 
@@ -254,8 +292,96 @@ impl Pane {
         }
 
         self.child.take();
+        self.master.take();
+
+        self.finish_reader(Duration::from_secs(1))?;
 
         Ok(next_state)
+    }
+
+    fn finish_reader(&mut self, timeout: Duration) -> Result<(), PaneError> {
+        let Some(reader_task) = self.reader_task.take() else {
+            return Ok(());
+        };
+
+        match reader_task.finished.recv_timeout(timeout) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => reader_task
+                .handle
+                .join()
+                .map_err(|_| PaneError::ReaderThreadPanicked),
+            Err(RecvTimeoutError::Timeout) => {
+                let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+                self.reader_task = Some(reader_task);
+                Err(PaneError::ReaderShutdownTimeout { timeout_ms })
+            }
+        }
+    }
+
+    fn force_cleanup(&mut self) {
+        self.shutting_down.store(true, Ordering::Release);
+
+        self.writer.take();
+
+        if let Some(mut child) = self.child.take() {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    // already reaped
+                }
+                Ok(None) | Err(_) => {
+                    if let Err(error) = child.kill() {
+                        log::error!(
+                            "pane {} failed to terminate child during fallback cleanup: {error}",
+                            self.id
+                        );
+                    }
+
+                    if let Err(error) = child.wait() {
+                        log::error!(
+                            "pane {} failed to reap child during fallback cleanup: {error}",
+                            self.id
+                        );
+                    }
+                }
+            }
+        }
+
+        self.master.take();
+
+        if let Err(error) = self.finish_reader(Duration::from_millis(100)) {
+            log::error!(
+                "pane {} failed to stop reader during fallback cleanup: {error}",
+                self.id
+            );
+        }
+    }
+
+    #[cfg(test)]
+    fn is_shutdown_complete(&self) -> bool {
+        self.child.is_none()
+            && self.writer.is_none()
+            && self.master.is_none()
+            && self.reader_task.is_none()
+    }
+}
+
+impl Drop for Pane {
+    fn drop(&mut self) {
+        let already_clean = self.child.is_none()
+            && self.writer.is_none()
+            && self.master.is_none()
+            && self.reader_task.is_none();
+
+        if already_clean {
+            return;
+        }
+
+        if let Err(error) = self.shutdown() {
+            log::error!(
+                "pane {} failed normal shutdown during drop: {error}",
+                self.id
+            );
+            self.force_cleanup();
+        }
     }
 }
 
@@ -281,9 +407,12 @@ fn spawn_reader(
     mut reader: Box<dyn Read + Send>,
     grid: Arc<Mutex<Grid>>,
     state: Arc<Mutex<PaneState>>,
+    shutting_down: Arc<AtomicBool>,
     window: Option<Arc<Window>>,
-) {
-    std::thread::spawn(move || {
+) -> ReaderTask {
+    let (finished_tx, finished) = mpsc::sync_channel(1);
+
+    let handle = std::thread::spawn(move || {
         let mut parser = vte::Parser::new();
         let mut buf = [0u8; 4096];
         loop {
@@ -296,15 +425,17 @@ fn spawn_reader(
                 }
                 Ok(bytes_read) => bytes_read,
                 Err(error) => {
-                    let message = format!("PTY reader failed: {error}");
-                    log::error!("{message}");
+                    if !shutting_down.load(Ordering::Acquire) {
+                        let message = format!("PTY reader failed: {error}");
+                        log::error!("{message}");
 
-                    match state.lock() {
-                        Ok(mut state) => {
-                            *state = PaneState::Failed { message };
-                        }
-                        Err(lock_error) => {
-                            log::error!("pane lifecycle state lock is poisoned: {lock_error}");
+                        match state.lock() {
+                            Ok(mut state) => {
+                                *state = PaneState::Failed { message };
+                            }
+                            Err(lock_error) => {
+                                log::error!("pane lifecycle state lock is poisoned: {lock_error}");
+                            }
                         }
                     }
 
@@ -332,7 +463,11 @@ fn spawn_reader(
                 window.request_redraw();
             }
         }
+
+        let _ = finished_tx.send(());
     });
+
+    ReaderTask { handle, finished }
 }
 
 #[cfg(test)]
@@ -374,9 +509,29 @@ mod test {
         assert!(matches!(state, PaneState::Exited { .. }));
         assert_eq!(pane.state().unwrap(), state);
         assert!(pane.process_id().is_none());
+        assert!(pane.is_shutdown_complete());
         assert!(matches!(
             pane.write_input(b"test"),
             Err(PaneError::NotRunning)
         ));
+    }
+
+    #[test]
+    fn shutdown_is_idempotent() {
+        let mut pane = Pane::new("test".into(), 24, 80, None).unwrap();
+
+        let first = pane.shutdown().unwrap();
+        let second = pane.shutdown().unwrap();
+
+        assert_eq!(first, second);
+        assert!(pane.is_shutdown_complete());
+    }
+
+    #[test]
+    fn dropping_running_pane_performs_cleanup() {
+        let pane = Pane::new("test".into(), 24, 80, None).unwrap();
+
+        assert!(pane.process_id().is_some());
+        drop(pane);
     }
 }
