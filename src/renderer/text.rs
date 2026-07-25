@@ -260,7 +260,7 @@ impl Renderer {
                     for col in 0..grid.cols {
                         let cell = grid.cell(row_idx, col);
                         let start = text.len();
-                        text.push(cell.ch);
+                        text.push_str(cell.content.as_str());
                         if let Some(c) = term_to_rgba(&cell.bg) {
                             let x = rect.x + col as f32 * CELL_W;
                             cached_row.bg_verts.extend_from_slice(&Self::bg_quad(

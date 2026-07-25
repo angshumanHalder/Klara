@@ -16,9 +16,26 @@ pub enum CursorStyle {
     Bar,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CellContent {
+    Empty,
+    Narrow(String),
+    WideLeading(String),
+    WideContinuation,
+}
+
+impl CellContent {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Empty | Self::WideContinuation => " ",
+            Self::Narrow(text) | Self::WideLeading(text) => text,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
-    pub ch: char,
+    pub content: CellContent,
     pub fg: Color,
     pub bg: Color,
 }
@@ -26,7 +43,7 @@ pub struct Cell {
 impl Default for Cell {
     fn default() -> Self {
         Cell {
-            ch: ' ',
+            content: CellContent::Empty,
             fg: Color::Default,
             bg: Color::Default,
         }
@@ -108,7 +125,7 @@ impl Grid {
     pub fn put_char(&mut self, ch: char) {
         if self.cursor_row < self.rows && self.cursor_col < self.cols {
             self.cells[self.cursor_row][self.cursor_col] = Cell {
-                ch,
+                content: CellContent::Narrow(ch.to_string()),
                 fg: self.fg.clone(),
                 bg: self.bg.clone(),
             };
@@ -338,7 +355,7 @@ mod test {
     fn test_print_places_char_at_cursor() {
         let mut grid = Grid::new(24, 80);
         grid.print('A');
-        assert_eq!(grid.cell(0, 0).ch, 'A');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
         assert_eq!(grid.cursor_col, 1);
     }
 
@@ -408,8 +425,8 @@ mod test {
         grid.print('C');
         grid.execute(0x0d);
         grid.execute(0x0a);
-        assert_eq!(grid.cell(0, 0).ch, 'B');
-        assert_eq!(grid.cell(1, 0).ch, 'C');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("B".into()));
+        assert_eq!(grid.cell(1, 0).content, CellContent::Narrow("C".into()));
     }
 
     #[test]
@@ -417,17 +434,17 @@ mod test {
         let mut grid = Grid::new(24, 80);
         let mut parser = Parser::new();
         grid.print('A');
-        assert_eq!(grid.cell(0, 0).ch, 'A');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
         for &b in b"\x1b[?1049h" {
             parser.advance(&mut grid, b);
         }
         assert!(grid.in_alternate);
-        assert_eq!(grid.cell(0, 0).ch, ' ');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Empty);
         for &b in b"\x1b[?1049l" {
             parser.advance(&mut grid, b);
         }
         assert!(!grid.in_alternate);
-        assert_eq!(grid.cell(0, 0).ch, 'A');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
     }
 
     #[test]
@@ -476,8 +493,8 @@ mod test {
 
         assert_eq!(grid.rows, 4);
         assert_eq!(grid.cols, 5);
-        assert_eq!(grid.cell(0, 0).ch, 'A');
-        assert_eq!(grid.cell(1, 1).ch, 'B');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
+        assert_eq!(grid.cell(1, 1).content, CellContent::Narrow("B".into()));
         assert_eq!(grid.cell(3, 4), &Cell::default());
         assert_eq!(grid.dirty, vec![true; 4]);
     }
@@ -506,7 +523,7 @@ mod test {
 
         grid.resize(2, 3).unwrap();
 
-        assert_eq!(grid.cell(1, 2).ch, 'X');
+        assert_eq!(grid.cell(1, 2).content, CellContent::Narrow("X".into()));
     }
 
     #[test]
@@ -525,14 +542,14 @@ mod test {
 
         assert_eq!(grid.rows, 4);
         assert_eq!(grid.cols, 5);
-        assert_eq!(grid.cell(0, 0).ch, 'A');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
         assert_eq!(grid.cell(3, 4), &Cell::default());
 
         for &byte in b"\x1b[?1049l" {
             parser.advance(&mut grid, byte);
         }
 
-        assert_eq!(grid.cell(0, 0).ch, 'P');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("P".into()));
         assert_eq!(grid.cell(3, 4), &Cell::default());
     }
 
@@ -546,7 +563,7 @@ mod test {
         assert_eq!(error, TerminalError::InvalidSize { rows: 0, cols: 3 });
         assert_eq!(grid.rows, 2);
         assert_eq!(grid.cols, 3);
-        assert_eq!(grid.cell(0, 0).ch, 'A');
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
     }
 
     #[test]
@@ -557,5 +574,26 @@ mod test {
         grid.resize(2, 3).unwrap();
 
         assert_eq!(grid.dirty, vec![false; 2]);
+    }
+
+    #[test]
+    fn default_cell_has_empty_content() {
+        assert_eq!(Cell::default().content, CellContent::Empty);
+    }
+
+    #[test]
+    fn put_char_creates_narrow_content() {
+        let mut grid = Grid::new(2, 2);
+        grid.put_char('A');
+
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
+    }
+
+    #[test]
+    fn cell_content_exposes_renderable_text() {
+        assert_eq!(CellContent::Empty.as_str(), " ");
+        assert_eq!(CellContent::Narrow("x".into()).as_str(), "x");
+        assert_eq!(CellContent::WideLeading("界".into()).as_str(), "界");
+        assert_eq!(CellContent::WideContinuation.as_str(), " ");
     }
 }

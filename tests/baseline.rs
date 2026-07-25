@@ -1,6 +1,6 @@
 use klara::{
     config::Config,
-    terminal::grid::{Cell, Color, CursorStyle, Grid},
+    terminal::grid::{Cell, CellContent, Color, CursorStyle, Grid},
 };
 
 #[test]
@@ -39,7 +39,7 @@ fn new_grid_has_valid_initial_state() {
 fn default_cell_has_no_explicit_colors() {
     let cell = Cell::default();
 
-    assert_eq!(cell.ch, ' ');
+    assert_eq!(cell.content, CellContent::Empty);
     assert_eq!(cell.fg, Color::Default);
     assert_eq!(cell.bg, Color::Default);
 }
