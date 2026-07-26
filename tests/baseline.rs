@@ -1,7 +1,9 @@
 use klara::{
     config::Config,
-    terminal::cell::{Cell, CellContent, Color},
-    terminal::grid::{CursorStyle, Grid},
+    terminal::{
+        cell::{Cell, CellContent, Color},
+        grid::{CursorStyle, Grid},
+    },
 };
 
 #[test]
@@ -41,8 +43,8 @@ fn default_cell_has_no_explicit_colors() {
     let cell = Cell::default();
 
     assert_eq!(cell.content, CellContent::Empty);
-    assert_eq!(cell.fg, Color::Default);
-    assert_eq!(cell.bg, Color::Default);
+    assert_eq!(cell.style.fg, Color::Default);
+    assert_eq!(cell.style.bg, Color::Default);
 }
 
 #[test]

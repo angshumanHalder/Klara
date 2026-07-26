@@ -1,4 +1,4 @@
-use crate::terminal::cell::{Cell, CellContent, Color};
+use crate::terminal::cell::{Cell, CellContent, CellStyle};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub(super) enum RowError {
@@ -70,12 +70,11 @@ impl Row {
         self.cells.fill(Cell::default());
     }
 
-    pub(super) fn write_narrow(&mut self, col: usize, text: String, fg: Color, bg: Color) {
+    pub(super) fn write_narrow(&mut self, col: usize, text: String, style: CellStyle) {
         self.clear_cell(col);
         self.cells[col] = Cell {
             content: CellContent::Narrow(text),
-            fg,
-            bg,
+            style,
         }
     }
 
@@ -83,8 +82,7 @@ impl Row {
         &mut self,
         col: usize,
         text: String,
-        fg: Color,
-        bg: Color,
+        style: CellStyle,
     ) -> Result<(), RowError> {
         if col >= self.cells.len() || col + 1 >= self.cells.len() {
             Err(RowError::WideCellDoesNotFit {
@@ -96,13 +94,11 @@ impl Row {
             self.clear_cell(col + 1);
             self.cells[col] = Cell {
                 content: CellContent::WideLeading(text),
-                fg: fg.clone(),
-                bg: bg.clone(),
+                style,
             };
             self.cells[col + 1] = Cell {
                 content: CellContent::WideContinuation,
-                fg,
-                bg,
+                style,
             };
             Ok(())
         }
@@ -111,6 +107,8 @@ impl Row {
 
 #[cfg(test)]
 mod test {
+    use crate::terminal::cell::{CellFlags, Color};
+
     use super::*;
 
     #[test]
@@ -127,8 +125,16 @@ mod test {
     #[test]
     fn clearing_wide_leader_clears_its_continuation() {
         let mut row = Row::new(3);
-        row.write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
+        row.write_wide(
+            1,
+            "界".into(),
+            CellStyle {
+                fg: Color::Default,
+                bg: Color::Default,
+                flags: CellFlags::empty(),
+            },
+        )
+        .unwrap();
 
         row.clear_cell(1);
 
@@ -139,8 +145,16 @@ mod test {
     #[test]
     fn clearing_wide_continuation_clears_its_leader() {
         let mut row = Row::new(3);
-        row.write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
+        row.write_wide(
+            1,
+            "界".into(),
+            CellStyle {
+                fg: Color::Default,
+                bg: Color::Default,
+                flags: CellFlags::empty(),
+            },
+        )
+        .unwrap();
 
         row.clear_cell(2);
 
@@ -151,8 +165,16 @@ mod test {
     #[test]
     fn shrinking_across_wide_pair_clears_retained_leader() {
         let mut row = Row::new(3);
-        row.write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
+        row.write_wide(
+            1,
+            "界".into(),
+            CellStyle {
+                fg: Color::Default,
+                bg: Color::Default,
+                flags: CellFlags::empty(),
+            },
+        )
+        .unwrap();
 
         row.resize(2);
 
@@ -163,14 +185,22 @@ mod test {
     #[test]
     fn growing_preserves_existing_content() {
         let mut row = Row::new(2);
-        row.write_narrow(1, "A".into(), Color::Indexed(2), Color::Rgb(10, 20, 30));
+        row.write_narrow(
+            1,
+            "A".into(),
+            CellStyle {
+                fg: Color::Indexed(2),
+                bg: Color::Rgb(10, 20, 30),
+                flags: CellFlags::empty(),
+            },
+        );
 
         row.resize(4);
 
         assert_eq!(row.len(), 4);
         assert_eq!(row.cell(1).content, CellContent::Narrow("A".into()));
-        assert_eq!(row.cell(1).fg, Color::Indexed(2));
-        assert_eq!(row.cell(1).bg, Color::Rgb(10, 20, 30));
+        assert_eq!(row.cell(1).style.fg, Color::Indexed(2));
+        assert_eq!(row.cell(1).style.bg, Color::Rgb(10, 20, 30));
         assert_eq!(row.cell(2), &Cell::default());
         assert_eq!(row.cell(3), &Cell::default());
     }
@@ -178,9 +208,25 @@ mod test {
     #[test]
     fn narrow_write_over_a_wide_leader() {
         let mut row = Row::new(3);
-        row.write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
-        row.write_narrow(1, "A".into(), Color::Default, Color::Default);
+        row.write_wide(
+            1,
+            "界".into(),
+            CellStyle {
+                fg: Color::Default,
+                bg: Color::Default,
+                flags: CellFlags::empty(),
+            },
+        )
+        .unwrap();
+        row.write_narrow(
+            1,
+            "A".into(),
+            CellStyle {
+                fg: Color::Default,
+                bg: Color::Default,
+                flags: CellFlags::empty(),
+            },
+        );
 
         assert_eq!(row.cell(1).content, CellContent::Narrow("A".into()));
         assert_eq!(row.cell(2).content, CellContent::Empty);
@@ -189,9 +235,25 @@ mod test {
     #[test]
     fn narrow_write_over_a_wide_continuation() {
         let mut row = Row::new(3);
-        row.write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
-        row.write_narrow(2, "A".into(), Color::Default, Color::Default);
+        row.write_wide(
+            1,
+            "界".into(),
+            CellStyle {
+                fg: Color::Default,
+                bg: Color::Default,
+                flags: CellFlags::empty(),
+            },
+        )
+        .unwrap();
+        row.write_narrow(
+            2,
+            "A".into(),
+            CellStyle {
+                fg: Color::Default,
+                bg: Color::Default,
+                flags: CellFlags::empty(),
+            },
+        );
 
         assert_eq!(row.cell(1).content, CellContent::Empty);
         assert_eq!(row.cell(2).content, CellContent::Narrow("A".into()));
@@ -201,10 +263,13 @@ mod test {
     fn wide_write_into_empty_cells() {
         let mut row = Row::new(3);
 
-        let fg = Color::Indexed(2);
-        let bg = Color::Rgb(10, 20, 30);
+        let style = CellStyle {
+            fg: Color::Indexed(2),
+            bg: Color::Rgb(10, 20, 30),
+            flags: CellFlags::empty(),
+        };
 
-        row.write_wide(1, "界".into(), fg, bg).unwrap();
+        row.write_wide(1, "界".into(), style).unwrap();
 
         assert_eq!(row.cell(1).content, CellContent::WideLeading("界".into()));
         assert_eq!(row.cell(2).content, CellContent::WideContinuation);
@@ -214,12 +279,14 @@ mod test {
     fn wide_write_overlapping_an_existing_pair_on_the_left() {
         let mut row = Row::new(3);
 
-        let fg = Color::Indexed(2);
-        let bg = Color::Rgb(10, 20, 30);
+        let style = CellStyle {
+            fg: Color::Indexed(2),
+            bg: Color::Rgb(10, 20, 30),
+            flags: CellFlags::empty(),
+        };
 
-        row.write_wide(1, "猫".into(), fg.clone(), bg.clone())
-            .unwrap();
-        row.write_wide(1, "好".into(), fg, bg).unwrap();
+        row.write_wide(1, "猫".into(), style).unwrap();
+        row.write_wide(1, "好".into(), style).unwrap();
 
         assert_eq!(row.cell(1).content, CellContent::WideLeading("好".into()));
         assert_eq!(row.cell(2).content, CellContent::WideContinuation);
@@ -229,17 +296,19 @@ mod test {
     fn wide_write_overlapping_an_existing_pair_on_the_right() {
         let mut row = Row::new(4);
 
-        let fg = Color::Indexed(2);
-        let bg = Color::Rgb(10, 20, 30);
+        let style = CellStyle {
+            fg: Color::Indexed(2),
+            bg: Color::Rgb(10, 20, 30),
+            flags: CellFlags::empty(),
+        };
 
-        row.write_wide(2, "猫".into(), fg.clone(), bg.clone())
-            .unwrap();
-        row.write_wide(1, "好".into(), fg, bg).unwrap();
+        row.write_wide(2, "猫".into(), style).unwrap();
+        row.write_wide(1, "好".into(), style).unwrap();
 
-        assert_eq!(row.cell(1).fg, Color::Indexed(2));
-        assert_eq!(row.cell(1).bg, Color::Rgb(10, 20, 30));
-        assert_eq!(row.cell(2).fg, Color::Indexed(2));
-        assert_eq!(row.cell(2).bg, Color::Rgb(10, 20, 30));
+        assert_eq!(row.cell(1).style.fg, Color::Indexed(2));
+        assert_eq!(row.cell(1).style.bg, Color::Rgb(10, 20, 30));
+        assert_eq!(row.cell(2).style.fg, Color::Indexed(2));
+        assert_eq!(row.cell(2).style.bg, Color::Rgb(10, 20, 30));
 
         assert_eq!(row.cell(1).content, CellContent::WideLeading("好".into()));
         assert_eq!(row.cell(2).content, CellContent::WideContinuation);
@@ -250,22 +319,33 @@ mod test {
     fn wide_write_at_last_column_returns_error_without_mutation() {
         let mut row = Row::new(3);
 
-        row.write_narrow(2, "A".into(), Color::Indexed(1), Color::Default);
+        let style = CellStyle {
+            fg: Color::Indexed(1),
+            bg: Color::Default,
+            flags: CellFlags::empty(),
+        };
 
-        let error = row
-            .write_wide(2, "猫".into(), Color::Indexed(2), Color::Default)
-            .unwrap_err();
+        row.write_narrow(2, "A".into(), style);
+
+        let error = row.write_wide(2, "猫".into(), style).unwrap_err();
 
         assert_eq!(error, RowError::WideCellDoesNotFit { col: 2, len: 3 });
 
         assert_eq!(row.cell(2).content, CellContent::Narrow("A".into()));
-        assert_eq!(row.cell(2).fg, Color::Indexed(1));
+        assert_eq!(row.cell(2).style.fg, Color::Indexed(1));
     }
 
     #[test]
     fn clear_preserves_length_resets_all_cells() {
         let mut row = Row::new(2);
-        row.write_narrow(1, "A".into(), Color::Indexed(1), Color::Default);
+
+        let style = CellStyle {
+            fg: Color::Indexed(1),
+            bg: Color::Default,
+            flags: CellFlags::empty(),
+        };
+
+        row.write_narrow(1, "A".into(), style);
 
         row.clear();
 

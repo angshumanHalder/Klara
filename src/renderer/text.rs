@@ -261,7 +261,7 @@ impl Renderer {
                         let cell = grid.cell(row_idx, col);
                         let start = text.len();
                         text.push_str(cell.content.as_str());
-                        if let Some(c) = term_to_rgba(&cell.bg) {
+                        if let Some(c) = term_to_rgba(&cell.style.bg) {
                             let x = rect.x + col as f32 * CELL_W;
                             cached_row.bg_verts.extend_from_slice(&Self::bg_quad(
                                 screen_w,
@@ -273,7 +273,7 @@ impl Renderer {
                                 c,
                             ));
                         }
-                        let current_color = term_to_gcolor(&cell.fg);
+                        let current_color = term_to_gcolor(&cell.style.fg);
                         if Some(current_color) != last_color {
                             if let Some(c) = last_color {
                                 fg.push((span_start..start, c));

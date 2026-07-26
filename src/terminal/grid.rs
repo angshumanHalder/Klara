@@ -1,3 +1,4 @@
+use crate::terminal::cell::CellStyle;
 use crate::terminal::row::Row;
 
 use super::TerminalError;
@@ -14,16 +15,16 @@ pub enum CursorStyle {
 }
 
 pub struct Grid {
+    saved_cursor: (usize, usize),
+    cells: Vec<Row>,
+    current_style: CellStyle,
+    alternate: Vec<Row>,
+
     pub rows: usize,
     pub cols: usize,
-    cells: Vec<Row>,
     pub cursor_row: usize,
     pub cursor_col: usize,
-    fg: Color,
-    bg: Color,
-    alternate: Vec<Row>,
     pub in_alternate: bool,
-    saved_cursor: (usize, usize),
     pub cursor_style: CursorStyle,
     pub cursor_visible: bool,
     pub application_cursor: bool,
@@ -39,8 +40,7 @@ impl Grid {
             cells: new_buffer(rows, cols),
             cursor_row: 0,
             cursor_col: 0,
-            fg: Color::Default,
-            bg: Color::Default,
+            current_style: CellStyle::default(),
             alternate: new_buffer(rows, cols),
             in_alternate: false,
             saved_cursor: (0, 0),
@@ -90,8 +90,7 @@ impl Grid {
             self.cells[self.cursor_row].write_narrow(
                 self.cursor_col,
                 ch.to_string(),
-                self.fg.clone(),
-                self.bg.clone(),
+                self.current_style,
             );
             self.dirty[self.cursor_row] = true;
         }
@@ -181,41 +180,46 @@ impl Grid {
             let Some(param) = iter.next() else { break };
             match param[0] {
                 0 => {
-                    self.fg = Color::Default;
-                    self.bg = Color::Default
+                    self.current_style = CellStyle::default();
                 }
-                30..=37 => self.fg = Color::Indexed(param[0] as u8 - 30),
+                30..=37 => self.current_style.fg = Color::Indexed(param[0] as u8 - 30),
                 38 => {
                     let next = iter.next().map(|p| p[0]).unwrap_or(0);
                     match next {
-                        5 => self.fg = Color::Indexed(iter.next().map(|p| p[0] as u8).unwrap_or(0)),
+                        5 => {
+                            self.current_style.fg =
+                                Color::Indexed(iter.next().map(|p| p[0] as u8).unwrap_or(0))
+                        }
                         2 => {
                             let r = iter.next().map(|p| p[0] as u8).unwrap_or(0);
                             let g = iter.next().map(|p| p[0] as u8).unwrap_or(0);
                             let b = iter.next().map(|p| p[0] as u8).unwrap_or(0);
-                            self.fg = Color::Rgb(r, g, b);
+                            self.current_style.fg = Color::Rgb(r, g, b);
                         }
                         _ => {}
                     }
                 }
-                39 => self.fg = Color::Default,
-                40..=47 => self.bg = Color::Indexed(param[0] as u8 - 40),
+                39 => self.current_style.fg = Color::Default,
+                40..=47 => self.current_style.bg = Color::Indexed(param[0] as u8 - 40),
                 48 => {
                     let next = iter.next().map(|p| p[0]).unwrap_or(0);
                     match next {
-                        5 => self.bg = Color::Indexed(iter.next().map(|p| p[0] as u8).unwrap_or(0)),
+                        5 => {
+                            self.current_style.bg =
+                                Color::Indexed(iter.next().map(|p| p[0] as u8).unwrap_or(0))
+                        }
                         2 => {
                             let r = iter.next().map(|p| p[0] as u8).unwrap_or(0);
                             let g = iter.next().map(|p| p[0] as u8).unwrap_or(0);
                             let b = iter.next().map(|p| p[0] as u8).unwrap_or(0);
-                            self.bg = Color::Rgb(r, g, b);
+                            self.current_style.bg = Color::Rgb(r, g, b);
                         }
                         _ => {}
                     }
                 }
-                49 => self.bg = Color::Default,
-                90..=97 => self.fg = Color::Indexed(param[0] as u8 - 90 + 8),
-                100..=107 => self.bg = Color::Indexed(param[0] as u8 - 100 + 8),
+                49 => self.current_style.bg = Color::Default,
+                90..=97 => self.current_style.fg = Color::Indexed(param[0] as u8 - 90 + 8),
+                100..=107 => self.current_style.bg = Color::Indexed(param[0] as u8 - 100 + 8),
                 _ => {}
             }
         }
@@ -353,7 +357,7 @@ mod test {
         }
         grid.print('X');
         let cell = grid.cell(0, 0);
-        assert!(matches!(cell.fg, Color::Indexed(2)));
+        assert!(matches!(cell.style.fg, Color::Indexed(2)));
     }
 
     #[test]
@@ -365,7 +369,7 @@ mod test {
         }
 
         grid.print('X');
-        assert!(matches!(grid.cell(0, 0).fg, Color::Default));
+        assert!(matches!(grid.cell(0, 0).style.fg, Color::Default));
     }
 
     #[test]
@@ -555,9 +559,8 @@ mod test {
     #[test]
     fn erasing_wide_continuation_erases_wide_leading() {
         let mut grid = Grid::new(2, 4);
-        grid.cells[0]
-            .write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
+        let style = CellStyle::default();
+        grid.cells[0].write_wide(1, "界".into(), style).unwrap();
 
         grid.cursor_row = 0;
         grid.cursor_col = 2;
@@ -571,9 +574,9 @@ mod test {
     #[test]
     fn erasing_wide_leading_erases_wide_continuation() {
         let mut grid = Grid::new(2, 4);
-        grid.cells[0]
-            .write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
+
+        let style = CellStyle::default();
+        grid.cells[0].write_wide(1, "界".into(), style).unwrap();
 
         grid.cursor_row = 0;
         grid.cursor_col = 1;
@@ -588,9 +591,9 @@ mod test {
     fn resize_clears_wide_leading_when_continuation_is_truncated() {
         let mut grid = Grid::new(1, 3);
 
-        grid.cells[0]
-            .write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
+        let style = CellStyle::default();
+
+        grid.cells[0].write_wide(1, "界".into(), style).unwrap();
 
         grid.resize(1, 2).unwrap();
 
@@ -602,13 +605,13 @@ mod test {
     #[test]
     fn resize_clears_wide_leading_when_continuation_is_truncated_in_alternate() {
         let mut grid = Grid::new(1, 3);
-        grid.cells[0].write_narrow(0, "P".into(), Color::Default, Color::Default);
+
+        let style = CellStyle::default();
+        grid.cells[0].write_narrow(0, "P".into(), style);
 
         grid.enter_alternate_screen();
 
-        grid.cells[0]
-            .write_wide(1, "界".into(), Color::Default, Color::Default)
-            .unwrap();
+        grid.cells[0].write_wide(1, "界".into(), style).unwrap();
 
         grid.resize(1, 2).unwrap();
 
@@ -619,5 +622,24 @@ mod test {
         grid.leave_alternate_screen();
 
         assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("P".into()));
+    }
+
+    #[test]
+    fn printed_cells_retain_style_after_current_style_changes() {
+        let mut grid = Grid::new(2, 8);
+        let mut parser = Parser::new();
+        // \x1b[32m - green foreground
+        for &b in b"\x1b[32m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('A');
+
+        for &b in b"\x1b[0m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('B');
+
+        assert!(matches!(grid.cell(0, 0).style.fg, Color::Indexed(2)));
+        assert!(matches!(grid.cell(0, 1).style.fg, Color::Default));
     }
 }
