@@ -1,6 +1,8 @@
+use crate::terminal::row::Row;
+
 use super::TerminalError;
 
-use super::cell::{Cell, CellContent, Color};
+use super::cell::{Cell, Color};
 
 use vte::{Params, Perform};
 
@@ -14,12 +16,12 @@ pub enum CursorStyle {
 pub struct Grid {
     pub rows: usize,
     pub cols: usize,
-    cells: Vec<Vec<Cell>>,
+    cells: Vec<Row>,
     pub cursor_row: usize,
     pub cursor_col: usize,
     fg: Color,
     bg: Color,
-    alternate: Vec<Vec<Cell>>,
+    alternate: Vec<Row>,
     pub in_alternate: bool,
     saved_cursor: (usize, usize),
     pub cursor_style: CursorStyle,
@@ -34,12 +36,12 @@ impl Grid {
         Grid {
             rows,
             cols,
-            cells: vec![vec![Cell::default(); cols]; rows],
+            cells: new_buffer(rows, cols),
             cursor_row: 0,
             cursor_col: 0,
             fg: Color::Default,
             bg: Color::Default,
-            alternate: vec![vec![Cell::default(); cols]; rows],
+            alternate: new_buffer(rows, cols),
             in_alternate: false,
             saved_cursor: (0, 0),
             cursor_style: CursorStyle::Block,
@@ -80,16 +82,17 @@ impl Grid {
     }
 
     pub fn cell(&self, row: usize, col: usize) -> &Cell {
-        &self.cells[row][col]
+        self.cells[row].cell(col)
     }
 
     pub fn put_char(&mut self, ch: char) {
         if self.cursor_row < self.rows && self.cursor_col < self.cols {
-            self.cells[self.cursor_row][self.cursor_col] = Cell {
-                content: CellContent::Narrow(ch.to_string()),
-                fg: self.fg.clone(),
-                bg: self.bg.clone(),
-            };
+            self.cells[self.cursor_row].write_narrow(
+                self.cursor_col,
+                ch.to_string(),
+                self.fg.clone(),
+                self.bg.clone(),
+            );
             self.dirty[self.cursor_row] = true;
         }
         self.cursor_col += 1;
@@ -105,7 +108,7 @@ impl Grid {
 
     fn scroll_up(&mut self) {
         self.cells.remove(0);
-        self.cells.push(vec![Cell::default(); self.cols]);
+        self.cells.push(Row::new(self.cols));
         self.dirty.fill(true);
     }
 
@@ -124,34 +127,28 @@ impl Grid {
             0 => {
                 self.erase_line(0);
                 for r in (self.cursor_row + 1)..self.rows {
-                    let was_blank = self.cells[r].iter().all(|c| *c == Cell::default());
+                    let was_blank = self.cells[r].is_blank();
                     if was_blank {
                         continue;
                     }
-                    for c in 0..self.cols {
-                        self.cells[r][c] = Cell::default();
-                    }
+                    self.cells[r].clear();
                     self.dirty[r] = true;
                 }
             }
             1 => {
                 for r in 0..self.cursor_row {
-                    let was_blank = self.cells[r].iter().all(|c| *c == Cell::default());
+                    let was_blank = self.cells[r].is_blank();
                     if was_blank {
                         continue;
                     }
-                    for c in 0..self.cols {
-                        self.cells[r][c] = Cell::default();
-                    }
+                    self.cells[r].clear();
                     self.dirty[r] = true;
                 }
                 self.erase_line(1);
             }
             2 | 3 => {
                 for r in 0..self.rows {
-                    for c in 0..self.cols {
-                        self.cells[r][c] = Cell::default();
-                    }
+                    self.cells[r].clear();
                 }
                 self.dirty.fill(true);
             }
@@ -163,7 +160,7 @@ impl Grid {
         self.saved_cursor = (self.cursor_row, self.cursor_col);
         std::mem::swap(&mut self.cells, &mut self.alternate);
         for row in &mut self.cells {
-            row.fill(Cell::default());
+            row.clear();
         }
         self.cursor_row = 0;
         self.cursor_col = 0;
@@ -226,50 +223,23 @@ impl Grid {
     }
 
     fn clear_cell(&mut self, row: usize, col: usize) {
-        let paired_col = match &self.cells[row][col].content {
-            CellContent::WideLeading(_)
-                if col + 1 < self.cols
-                    && matches!(
-                        &self.cells[row][col + 1].content,
-                        CellContent::WideContinuation
-                    ) =>
-            {
-                Some(col + 1)
-            }
-            CellContent::WideContinuation
-                if col > 0
-                    && matches!(
-                        &self.cells[row][col - 1].content,
-                        CellContent::WideLeading(_)
-                    ) =>
-            {
-                Some(col - 1)
-            }
-            _ => None,
-        };
-        self.cells[row][col] = Cell::default();
-        if let Some(paired_col) = paired_col {
-            self.cells[row][paired_col] = Cell::default();
-        }
+        self.cells[row].clear_cell(col);
         self.dirty[row] = true;
     }
 }
 
-fn resize_buffer(buffer: &mut Vec<Vec<Cell>>, new_rows: usize, new_cols: usize) {
+fn new_buffer(rows: usize, cols: usize) -> Vec<Row> {
+    (0..rows).map(|_| Row::new(cols)).collect()
+}
+
+fn resize_buffer(buffer: &mut Vec<Row>, new_rows: usize, new_cols: usize) {
     buffer.truncate(new_rows);
 
     for row in buffer.iter_mut() {
-        let truncates_wide_pair = new_cols < row.len()
-            && new_cols > 0
-            && matches!(&row[new_cols - 1].content, CellContent::WideLeading(_))
-            && matches!(&row[new_cols].content, CellContent::WideContinuation);
-        if truncates_wide_pair {
-            row[new_cols - 1] = Cell::default();
-        }
-        row.resize(new_cols, Cell::default());
+        row.resize(new_cols);
     }
 
-    buffer.resize_with(new_rows, || vec![Cell::default(); new_cols]);
+    buffer.resize_with(new_rows, || Row::new(new_cols));
 }
 
 impl Perform for Grid {
@@ -344,6 +314,8 @@ impl Perform for Grid {
 
 #[cfg(test)]
 mod test {
+    use crate::terminal::cell::CellContent;
+
     use super::*;
     use vte::Parser;
 
@@ -583,8 +555,9 @@ mod test {
     #[test]
     fn erasing_wide_continuation_erases_wide_leading() {
         let mut grid = Grid::new(2, 4);
-        grid.cells[0][1].content = CellContent::WideLeading("界".into());
-        grid.cells[0][2].content = CellContent::WideContinuation;
+        grid.cells[0]
+            .write_wide(1, "界".into(), Color::Default, Color::Default)
+            .unwrap();
 
         grid.cursor_row = 0;
         grid.cursor_col = 2;
@@ -598,8 +571,9 @@ mod test {
     #[test]
     fn erasing_wide_leading_erases_wide_continuation() {
         let mut grid = Grid::new(2, 4);
-        grid.cells[0][1].content = CellContent::WideLeading("界".into());
-        grid.cells[0][2].content = CellContent::WideContinuation;
+        grid.cells[0]
+            .write_wide(1, "界".into(), Color::Default, Color::Default)
+            .unwrap();
 
         grid.cursor_row = 0;
         grid.cursor_col = 1;
@@ -614,8 +588,9 @@ mod test {
     fn resize_clears_wide_leading_when_continuation_is_truncated() {
         let mut grid = Grid::new(1, 3);
 
-        grid.cells[0][1].content = CellContent::WideLeading("界".into());
-        grid.cells[0][2].content = CellContent::WideContinuation;
+        grid.cells[0]
+            .write_wide(1, "界".into(), Color::Default, Color::Default)
+            .unwrap();
 
         grid.resize(1, 2).unwrap();
 
@@ -627,12 +602,13 @@ mod test {
     #[test]
     fn resize_clears_wide_leading_when_continuation_is_truncated_in_alternate() {
         let mut grid = Grid::new(1, 3);
-        grid.cells[0][0].content = CellContent::Narrow("P".into());
+        grid.cells[0].write_narrow(0, "P".into(), Color::Default, Color::Default);
 
         grid.enter_alternate_screen();
 
-        grid.cells[0][1].content = CellContent::WideLeading("界".into());
-        grid.cells[0][2].content = CellContent::WideContinuation;
+        grid.cells[0]
+            .write_wide(1, "界".into(), Color::Default, Color::Default)
+            .unwrap();
 
         grid.resize(1, 2).unwrap();
 
