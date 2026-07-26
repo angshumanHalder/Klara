@@ -1,6 +1,7 @@
 use klara::{
     config::Config,
-    terminal::grid::{Cell, CellContent, Color, CursorStyle, Grid},
+    terminal::cell::{Cell, CellContent, Color},
+    terminal::grid::{CursorStyle, Grid},
 };
 
 #[test]

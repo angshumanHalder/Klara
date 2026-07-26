@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+pub mod cell;
 pub mod grid;
 
 #[derive(Debug, Error, PartialEq, Eq)]

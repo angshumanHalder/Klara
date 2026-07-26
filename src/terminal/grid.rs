@@ -1,53 +1,14 @@
 use super::TerminalError;
 
-use vte::{Params, Perform};
+use super::cell::{Cell, CellContent, Color};
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Color {
-    Default,
-    Indexed(u8),
-    Rgb(u8, u8, u8),
-}
+use vte::{Params, Perform};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CursorStyle {
     Block,
     Underline,
     Bar,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CellContent {
-    Empty,
-    Narrow(String),
-    WideLeading(String),
-    WideContinuation,
-}
-
-impl CellContent {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Empty | Self::WideContinuation => " ",
-            Self::Narrow(text) | Self::WideLeading(text) => text,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Cell {
-    pub content: CellContent,
-    pub fg: Color,
-    pub bg: Color,
-}
-
-impl Default for Cell {
-    fn default() -> Self {
-        Cell {
-            content: CellContent::Empty,
-            fg: Color::Default,
-            bg: Color::Default,
-        }
-    }
 }
 
 pub struct Grid {
@@ -151,12 +112,11 @@ impl Grid {
     fn erase_line(&mut self, mode: u16) {
         let row = self.cursor_row;
         match mode {
-            0 => (self.cursor_col..self.cols).for_each(|c| self.cells[row][c] = Cell::default()),
-            1 => (0..=self.cursor_col).for_each(|c| self.cells[row][c] = Cell::default()),
-            2 => (0..self.cols).for_each(|c| self.cells[row][c] = Cell::default()),
+            0 => (self.cursor_col..self.cols).for_each(|c| self.clear_cell(row, c)),
+            1 => (0..=self.cursor_col).for_each(|c| self.clear_cell(row, c)),
+            2 => (0..self.cols).for_each(|c| self.clear_cell(row, c)),
             _ => {}
         }
-        self.dirty[row] = true;
     }
 
     fn erase_display(&mut self, mode: u16) {
@@ -263,6 +223,35 @@ impl Grid {
             }
         }
         self.dirty.fill(true);
+    }
+
+    fn clear_cell(&mut self, row: usize, col: usize) {
+        let paired_col = match &self.cells[row][col].content {
+            CellContent::WideLeading(_)
+                if col + 1 < self.cols
+                    && matches!(
+                        &self.cells[row][col + 1].content,
+                        CellContent::WideContinuation
+                    ) =>
+            {
+                Some(col + 1)
+            }
+            CellContent::WideContinuation
+                if col > 0
+                    && matches!(
+                        &self.cells[row][col - 1].content,
+                        CellContent::WideLeading(_)
+                    ) =>
+            {
+                Some(col - 1)
+            }
+            _ => None,
+        };
+        self.cells[row][col] = Cell::default();
+        if let Some(paired_col) = paired_col {
+            self.cells[row][paired_col] = Cell::default();
+        }
+        self.dirty[row] = true;
     }
 }
 
@@ -577,11 +566,6 @@ mod test {
     }
 
     #[test]
-    fn default_cell_has_empty_content() {
-        assert_eq!(Cell::default().content, CellContent::Empty);
-    }
-
-    #[test]
     fn put_char_creates_narrow_content() {
         let mut grid = Grid::new(2, 2);
         grid.put_char('A');
@@ -590,10 +574,32 @@ mod test {
     }
 
     #[test]
-    fn cell_content_exposes_renderable_text() {
-        assert_eq!(CellContent::Empty.as_str(), " ");
-        assert_eq!(CellContent::Narrow("x".into()).as_str(), "x");
-        assert_eq!(CellContent::WideLeading("界".into()).as_str(), "界");
-        assert_eq!(CellContent::WideContinuation.as_str(), " ");
+    fn erasing_wide_continuation_erases_wide_leading() {
+        let mut grid = Grid::new(2, 4);
+        grid.cells[0][1].content = CellContent::WideLeading("界".into());
+        grid.cells[0][2].content = CellContent::WideContinuation;
+
+        grid.cursor_row = 0;
+        grid.cursor_col = 2;
+
+        grid.erase_line(0);
+
+        assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
+        assert_eq!(grid.cell(0, 2).content, CellContent::Empty);
+    }
+
+    #[test]
+    fn erasing_wide_leading_erases_wide_continuation() {
+        let mut grid = Grid::new(2, 4);
+        grid.cells[0][1].content = CellContent::WideLeading("界".into());
+        grid.cells[0][2].content = CellContent::WideContinuation;
+
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+
+        grid.erase_line(1);
+
+        assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
+        assert_eq!(grid.cell(0, 2).content, CellContent::Empty);
     }
 }

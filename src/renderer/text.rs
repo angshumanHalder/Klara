@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{layout::Rect, pane::Pane, terminal::grid::Color as TermColor};
+use crate::{layout::Rect, pane::Pane, terminal::cell::Color as TermColor};
 use bytemuck::{Pod, Zeroable};
 use glyphon::{
     Attrs, Buffer as TextBuffer, Cache, Color as GColor, Family, FontSystem, Metrics, Resolution,
