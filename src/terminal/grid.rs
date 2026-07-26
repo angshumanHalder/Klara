@@ -259,6 +259,13 @@ fn resize_buffer(buffer: &mut Vec<Vec<Cell>>, new_rows: usize, new_cols: usize) 
     buffer.truncate(new_rows);
 
     for row in buffer.iter_mut() {
+        let truncates_wide_pair = new_cols < row.len()
+            && new_cols > 0
+            && matches!(&row[new_cols - 1].content, CellContent::WideLeading(_))
+            && matches!(&row[new_cols].content, CellContent::WideContinuation);
+        if truncates_wide_pair {
+            row[new_cols - 1] = Cell::default();
+        }
         row.resize(new_cols, Cell::default());
     }
 
@@ -601,5 +608,40 @@ mod test {
 
         assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
         assert_eq!(grid.cell(0, 2).content, CellContent::Empty);
+    }
+
+    #[test]
+    fn resize_clears_wide_leading_when_continuation_is_truncated() {
+        let mut grid = Grid::new(1, 3);
+
+        grid.cells[0][1].content = CellContent::WideLeading("界".into());
+        grid.cells[0][2].content = CellContent::WideContinuation;
+
+        grid.resize(1, 2).unwrap();
+
+        assert_eq!(grid.rows, 1);
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
+    }
+
+    #[test]
+    fn resize_clears_wide_leading_when_continuation_is_truncated_in_alternate() {
+        let mut grid = Grid::new(1, 3);
+        grid.cells[0][0].content = CellContent::Narrow("P".into());
+
+        grid.enter_alternate_screen();
+
+        grid.cells[0][1].content = CellContent::WideLeading("界".into());
+        grid.cells[0][2].content = CellContent::WideContinuation;
+
+        grid.resize(1, 2).unwrap();
+
+        assert_eq!(grid.rows, 1);
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
+
+        grid.leave_alternate_screen();
+
+        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("P".into()));
     }
 }
