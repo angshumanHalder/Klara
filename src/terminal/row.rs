@@ -132,6 +132,7 @@ mod test {
                 fg: Color::Default,
                 bg: Color::Default,
                 flags: CellFlags::empty(),
+                ..CellStyle::default()
             },
         )
         .unwrap();
@@ -152,6 +153,7 @@ mod test {
                 fg: Color::Default,
                 bg: Color::Default,
                 flags: CellFlags::empty(),
+                ..CellStyle::default()
             },
         )
         .unwrap();
@@ -172,6 +174,7 @@ mod test {
                 fg: Color::Default,
                 bg: Color::Default,
                 flags: CellFlags::empty(),
+                ..CellStyle::default()
             },
         )
         .unwrap();
@@ -192,6 +195,7 @@ mod test {
                 fg: Color::Indexed(2),
                 bg: Color::Rgb(10, 20, 30),
                 flags: CellFlags::empty(),
+                ..CellStyle::default()
             },
         );
 
@@ -215,6 +219,7 @@ mod test {
                 fg: Color::Default,
                 bg: Color::Default,
                 flags: CellFlags::empty(),
+                ..CellStyle::default()
             },
         )
         .unwrap();
@@ -225,6 +230,7 @@ mod test {
                 fg: Color::Default,
                 bg: Color::Default,
                 flags: CellFlags::empty(),
+                ..CellStyle::default()
             },
         );
 
@@ -242,6 +248,7 @@ mod test {
                 fg: Color::Default,
                 bg: Color::Default,
                 flags: CellFlags::empty(),
+                ..CellStyle::default()
             },
         )
         .unwrap();
@@ -252,6 +259,7 @@ mod test {
                 fg: Color::Default,
                 bg: Color::Default,
                 flags: CellFlags::empty(),
+                ..CellStyle::default()
             },
         );
 
@@ -267,6 +275,7 @@ mod test {
             fg: Color::Indexed(2),
             bg: Color::Rgb(10, 20, 30),
             flags: CellFlags::empty(),
+            ..CellStyle::default()
         };
 
         row.write_wide(1, "界".into(), style).unwrap();
@@ -283,6 +292,7 @@ mod test {
             fg: Color::Indexed(2),
             bg: Color::Rgb(10, 20, 30),
             flags: CellFlags::empty(),
+            ..CellStyle::default()
         };
 
         row.write_wide(1, "猫".into(), style).unwrap();
@@ -300,6 +310,7 @@ mod test {
             fg: Color::Indexed(2),
             bg: Color::Rgb(10, 20, 30),
             flags: CellFlags::empty(),
+            ..CellStyle::default()
         };
 
         row.write_wide(2, "猫".into(), style).unwrap();
@@ -323,6 +334,7 @@ mod test {
             fg: Color::Indexed(1),
             bg: Color::Default,
             flags: CellFlags::empty(),
+            ..CellStyle::default()
         };
 
         row.write_narrow(2, "A".into(), style);
@@ -343,6 +355,7 @@ mod test {
             fg: Color::Indexed(1),
             bg: Color::Default,
             flags: CellFlags::empty(),
+            ..CellStyle::default()
         };
 
         row.write_narrow(1, "A".into(), style);

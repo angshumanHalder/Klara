@@ -15,6 +15,17 @@ pub enum CellContent {
     WideContinuation,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub enum UnderlineStyle {
+    #[default]
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+}
+
 impl CellContent {
     pub fn as_str(&self) -> &str {
         match self {
@@ -45,7 +56,6 @@ bitflags! {
         const BOLD = 1 << 0;
         const DIM = 1 << 1;
         const ITALIC = 1 << 2;
-        const UNDERLINE = 1 << 3;
         const STRIKEOUT = 1 << 4;
         const REVERSE = 1 << 5;
         const HIDDEN = 1 << 6;
@@ -58,6 +68,8 @@ pub struct CellStyle {
     pub fg: Color,
     pub bg: Color,
     pub flags: CellFlags,
+    pub underline_style: UnderlineStyle,
+    pub underline_color: Option<Color>,
 }
 
 impl Default for CellStyle {
@@ -66,6 +78,8 @@ impl Default for CellStyle {
             fg: Color::Default,
             bg: Color::Default,
             flags: CellFlags::empty(),
+            underline_style: UnderlineStyle::default(),
+            underline_color: None,
         }
     }
 }
@@ -126,6 +140,39 @@ mod test {
         assert_eq!(style.fg, Color::Default);
         assert_eq!(style.bg, Color::Default);
         assert_eq!(style.flags, CellFlags::empty());
+        assert_eq!(style.underline_style, UnderlineStyle::None);
+        assert_eq!(style.underline_color, None);
+    }
+
+    #[test]
+    fn default_underline_style_is_none() {
+        assert_eq!(UnderlineStyle::default(), UnderlineStyle::None);
+    }
+
+    #[test]
+    fn style_stores_explicit_underline_style_and_color() {
+        let style = CellStyle {
+            underline_style: UnderlineStyle::Curly,
+            underline_color: Some(Color::Rgb(10, 20, 30)),
+            ..CellStyle::default()
+        };
+
+        assert_eq!(style.underline_style, UnderlineStyle::Curly);
+        assert_eq!(style.underline_color, Some(Color::Rgb(10, 20, 30)));
+    }
+
+    #[test]
+    fn copying_style_preserves_underline_style_and_color() {
+        let style = CellStyle {
+            underline_style: UnderlineStyle::Double,
+            underline_color: Some(Color::Indexed(4)),
+            ..CellStyle::default()
+        };
+
+        let copied_style = style;
+
+        assert_eq!(copied_style.underline_style, UnderlineStyle::Double);
+        assert_eq!(copied_style.underline_color, Some(Color::Indexed(4)));
     }
 
     #[test]

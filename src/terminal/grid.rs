@@ -1,4 +1,4 @@
-use crate::terminal::cell::CellStyle;
+use crate::terminal::cell::{CellFlags, CellStyle, UnderlineStyle};
 use crate::terminal::row::Row;
 
 use super::TerminalError;
@@ -182,6 +182,24 @@ impl Grid {
                 0 => {
                     self.current_style = CellStyle::default();
                 }
+                1 => self.current_style.flags.insert(CellFlags::BOLD),
+                2 => self.current_style.flags.insert(CellFlags::DIM),
+                3 => self.current_style.flags.insert(CellFlags::ITALIC),
+                4 => self.current_style.underline_style = UnderlineStyle::Single,
+                5 | 6 => self.current_style.flags.insert(CellFlags::BLINK),
+                7 => self.current_style.flags.insert(CellFlags::REVERSE),
+                8 => self.current_style.flags.insert(CellFlags::HIDDEN),
+                9 => self.current_style.flags.insert(CellFlags::STRIKEOUT),
+                22 => {
+                    self.current_style.flags.remove(CellFlags::BOLD);
+                    self.current_style.flags.remove(CellFlags::DIM);
+                }
+                23 => self.current_style.flags.remove(CellFlags::ITALIC),
+                24 => self.current_style.underline_style = UnderlineStyle::None,
+                25 => self.current_style.flags.remove(CellFlags::BLINK),
+                27 => self.current_style.flags.remove(CellFlags::REVERSE),
+                28 => self.current_style.flags.remove(CellFlags::HIDDEN),
+                29 => self.current_style.flags.remove(CellFlags::STRIKEOUT),
                 30..=37 => self.current_style.fg = Color::Indexed(param[0] as u8 - 30),
                 38 => {
                     let next = iter.next().map(|p| p[0]).unwrap_or(0);
@@ -318,7 +336,7 @@ impl Perform for Grid {
 
 #[cfg(test)]
 mod test {
-    use crate::terminal::cell::CellContent;
+    use crate::terminal::cell::{CellContent, CellFlags};
 
     use super::*;
     use vte::Parser;
@@ -641,5 +659,103 @@ mod test {
 
         assert!(matches!(grid.cell(0, 0).style.fg, Color::Indexed(2)));
         assert!(matches!(grid.cell(0, 1).style.fg, Color::Default));
+    }
+
+    #[test]
+    fn sgr_enables_single_attr() {
+        let mut grid = Grid::new(2, 8);
+        let mut parser = Parser::new();
+        for &b in b"\x1b[1m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('A');
+        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
+    }
+
+    #[test]
+    fn sgr_enables_multiple_attrs() {
+        let mut grid = Grid::new(2, 8);
+        let mut parser = Parser::new();
+        for &b in b"\x1b[1;3;4m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('A');
+        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
+        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::ITALIC));
+        assert_eq!(
+            grid.cell(0, 0).style.underline_style,
+            UnderlineStyle::Single
+        );
+    }
+
+    #[test]
+    fn sgr_selective_reset_preserves_other_attrs() {
+        let mut grid = Grid::new(2, 8);
+        let mut parser = Parser::new();
+        for &b in b"\x1b[1;3;4m" {
+            parser.advance(&mut grid, b);
+        }
+        for &b in b"\x1b[23m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('A');
+        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
+        assert_eq!(
+            grid.cell(0, 0).style.underline_style,
+            UnderlineStyle::Single
+        );
+        assert!(!grid.cell(0, 0).style.flags.contains(CellFlags::ITALIC));
+    }
+
+    #[test]
+    fn sgr_22_resets_bold_and_dim() {
+        let mut grid = Grid::new(2, 8);
+        let mut parser = Parser::new();
+        for &b in b"\x1b[1;2;4m" {
+            parser.advance(&mut grid, b);
+        }
+        for &b in b"\x1b[22m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('A');
+        assert_eq!(
+            grid.cell(0, 0).style.underline_style,
+            UnderlineStyle::Single
+        );
+        assert!(!grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
+        assert!(!grid.cell(0, 0).style.flags.contains(CellFlags::DIM));
+    }
+
+    #[test]
+    fn sgr_zero_resets_entire_style() {
+        let mut grid = Grid::new(2, 8);
+        let mut parser = Parser::new();
+        for &b in b"\x1b[31;1;3m" {
+            parser.advance(&mut grid, b);
+        }
+        for &b in b"\x1b[0m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('A');
+        assert_eq!(grid.cell(0, 0).style.fg, Color::Default);
+        assert_eq!(grid.cell(0, 0).style.bg, Color::Default);
+        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::empty()));
+    }
+
+    #[test]
+    fn printed_cells_retain_flags_after_selective_reset() {
+        let mut grid = Grid::new(2, 8);
+        let mut parser = Parser::new();
+        for &b in b"\x1b[1m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('A');
+        for &b in b"\x1b[22m" {
+            parser.advance(&mut grid, b);
+        }
+        grid.print('B');
+
+        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
+        assert!(!grid.cell(0, 1).style.flags.contains(CellFlags::BOLD));
     }
 }
