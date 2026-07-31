@@ -1,11 +1,11 @@
-use crate::terminal::cell::{CellFlags, CellStyle, UnderlineStyle};
+use crate::terminal::cell::{CellFlags, CellStyle, HyperlinkId, UnderlineStyle};
 use crate::terminal::row::Row;
 
 use super::TerminalError;
 
 use super::cell::{Cell, Color};
 
-use vte::{Params, Perform};
+use vte::{Params, ParamsIter, Perform};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CursorStyle {
@@ -14,11 +14,19 @@ pub enum CursorStyle {
     Bar,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hyperlink {
+    pub uri: String,
+    pub osc_id: Option<String>,
+}
+
 pub struct Grid {
     saved_cursor: (usize, usize),
     cells: Vec<Row>,
     current_style: CellStyle,
     alternate: Vec<Row>,
+    active_hyperlink: Option<HyperlinkId>,
+    hyperlinks: Vec<Hyperlink>,
 
     pub rows: usize,
     pub cols: usize,
@@ -43,6 +51,8 @@ impl Grid {
             current_style: CellStyle::default(),
             alternate: new_buffer(rows, cols),
             in_alternate: false,
+            active_hyperlink: None,
+            hyperlinks: Vec::new(),
             saved_cursor: (0, 0),
             cursor_style: CursorStyle::Block,
             application_cursor: false,
@@ -91,6 +101,7 @@ impl Grid {
                 self.cursor_col,
                 ch.to_string(),
                 self.current_style,
+                self.active_hyperlink,
             );
             self.dirty[self.cursor_row] = true;
         }
@@ -103,6 +114,10 @@ impl Grid {
                 self.cursor_row = self.rows - 1;
             }
         }
+    }
+
+    pub fn hyperlink(&self, id: HyperlinkId) -> Option<&str> {
+        self.hyperlinks.get(id.0).map(|link| link.uri.as_str())
     }
 
     fn scroll_up(&mut self) {
@@ -185,7 +200,20 @@ impl Grid {
                 1 => self.current_style.flags.insert(CellFlags::BOLD),
                 2 => self.current_style.flags.insert(CellFlags::DIM),
                 3 => self.current_style.flags.insert(CellFlags::ITALIC),
-                4 => self.current_style.underline_style = UnderlineStyle::Single,
+                4 => {
+                    let style: Option<UnderlineStyle> = match param.get(1).copied() {
+                        None | Some(1) => Some(UnderlineStyle::Single),
+                        Some(0) => Some(UnderlineStyle::None),
+                        Some(2) => Some(UnderlineStyle::Double),
+                        Some(3) => Some(UnderlineStyle::Curly),
+                        Some(4) => Some(UnderlineStyle::Dotted),
+                        Some(5) => Some(UnderlineStyle::Dashed),
+                        _ => None,
+                    };
+                    if let Some(style) = style {
+                        self.current_style.underline_style = style;
+                    }
+                }
                 5 | 6 => self.current_style.flags.insert(CellFlags::BLINK),
                 7 => self.current_style.flags.insert(CellFlags::REVERSE),
                 8 => self.current_style.flags.insert(CellFlags::HIDDEN),
@@ -236,6 +264,12 @@ impl Grid {
                     }
                 }
                 49 => self.current_style.bg = Color::Default,
+                58 => {
+                    if let Some(color) = parse_sgr_color(param, &mut iter) {
+                        self.current_style.underline_color = Some(color);
+                    }
+                }
+                59 => self.current_style.underline_color = None,
                 90..=97 => self.current_style.fg = Color::Indexed(param[0] as u8 - 90 + 8),
                 100..=107 => self.current_style.bg = Color::Indexed(param[0] as u8 - 100 + 8),
                 _ => {}
@@ -247,6 +281,23 @@ impl Grid {
     fn clear_cell(&mut self, row: usize, col: usize) {
         self.cells[row].clear_cell(col);
         self.dirty[row] = true;
+    }
+
+    fn open_hyperlink(&mut self, uri: String, osc_id: Option<String>) {
+        let hyperlink = Hyperlink { uri, osc_id };
+        let id = self
+            .hyperlinks
+            .iter()
+            .position(|stored| stored == &hyperlink)
+            .unwrap_or_else(|| {
+                self.hyperlinks.push(hyperlink);
+                self.hyperlinks.len() - 1
+            });
+        self.active_hyperlink = Some(HyperlinkId(id));
+    }
+
+    fn close_hyperlink(&mut self) {
+        self.active_hyperlink = None;
     }
 }
 
@@ -262,6 +313,36 @@ fn resize_buffer(buffer: &mut Vec<Row>, new_rows: usize, new_cols: usize) {
     }
 
     buffer.resize_with(new_rows, || Row::new(new_cols));
+}
+
+fn parse_sgr_color(param: &[u16], iter: &mut ParamsIter<'_>) -> Option<Color> {
+    if param.len() > 1 {
+        match param {
+            [_, 5, index] => Some(Color::Indexed(u8::try_from(*index).ok()?)),
+            [_, 2, red, green, blue] => Some(Color::Rgb(
+                u8::try_from(*red).ok()?,
+                u8::try_from(*green).ok()?,
+                u8::try_from(*blue).ok()?,
+            )),
+            _ => None,
+        }
+    } else {
+        let mode = iter.next().map(|p| p[0]).unwrap_or(0);
+        match mode {
+            5 => Some(Color::Indexed(next_sgr_byte(iter.next())?)),
+            2 => Some(Color::Rgb(
+                next_sgr_byte(iter.next())?,
+                next_sgr_byte(iter.next())?,
+                next_sgr_byte(iter.next())?,
+            )),
+            _ => None,
+        }
+    }
+}
+
+fn next_sgr_byte(param: Option<&[u16]>) -> Option<u8> {
+    let value = param?.first().copied()?;
+    u8::try_from(value).ok()
 }
 
 impl Perform for Grid {
@@ -332,430 +413,36 @@ impl Perform for Grid {
     }
 
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        if params.first() != Some(&b"8".as_slice()) || params.len() < 3 {
+            return;
+        }
+        let osc_id = params[1]
+            .split(|byte| *byte == b':')
+            .find_map(|entry| entry.strip_prefix(b"id="))
+            .and_then(|id| std::str::from_utf8(id).ok())
+            .map(str::to_owned);
+        let Some(uri) = parse_osc_uri(params) else {
+            return;
+        };
+
+        if uri.is_empty() {
+            self.close_hyperlink();
+        } else {
+            self.open_hyperlink(uri, osc_id);
+        }
+    }
+}
+
+fn parse_osc_uri(params: &[&[u8]]) -> Option<String> {
+    let mut uri = String::from_utf8(params[2].to_vec()).ok()?;
+    for part in &params[3..] {
+        uri.push(';');
+        uri.push_str(std::str::from_utf8(part).ok()?);
+    }
+    Some(uri)
 }
 
 #[cfg(test)]
-mod test {
-    use crate::terminal::cell::{CellContent, CellFlags};
-
-    use super::*;
-    use vte::Parser;
-
-    #[test]
-    fn test_print_places_char_at_cursor() {
-        let mut grid = Grid::new(24, 80);
-        grid.print('A');
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
-        assert_eq!(grid.cursor_col, 1);
-    }
-
-    #[test]
-    fn test_lf_moves_cursor_down() {
-        let mut grid = Grid::new(24, 80);
-        grid.execute(0x0a);
-        assert_eq!(grid.cursor_row, 1);
-        assert_eq!(grid.cursor_col, 0);
-    }
-
-    #[test]
-    fn test_cr_resets_col() {
-        let mut grid = Grid::new(24, 80);
-        grid.cursor_col = 10;
-        grid.execute(0x0d);
-        assert_eq!(grid.cursor_col, 0);
-    }
-
-    #[test]
-    fn test_sgr_sets_fg_color() {
-        let mut grid = Grid::new(24, 80);
-        let mut parser = Parser::new();
-        // \x1b[32m - green foreground
-        for &b in b"\x1b[32m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('X');
-        let cell = grid.cell(0, 0);
-        assert!(matches!(cell.style.fg, Color::Indexed(2)));
-    }
-
-    #[test]
-    fn test_sgr_resets_clears_color() {
-        let mut grid = Grid::new(24, 80);
-        let mut parser = Parser::new();
-        for &b in b"\x1b[32m\x1b[0m" {
-            parser.advance(&mut grid, b);
-        }
-
-        grid.print('X');
-        assert!(matches!(grid.cell(0, 0).style.fg, Color::Default));
-    }
-
-    #[test]
-    fn test_cursor_movement() {
-        let mut grid = Grid::new(24, 80);
-        let mut parser = Parser::new();
-        // \x1b[5;10H - move to row 5 col 10
-        for &b in b"\x1b[5;10H" {
-            parser.advance(&mut grid, b);
-        }
-
-        assert_eq!(grid.cursor_row, 4);
-        assert_eq!(grid.cursor_col, 9);
-    }
-
-    #[test]
-    fn test_scroll_up_on_overflow() {
-        let mut grid = Grid::new(3, 80);
-        grid.print('A');
-        grid.execute(0x0d);
-        grid.execute(0x0a);
-        grid.print('B');
-        grid.execute(0x0d);
-        grid.execute(0x0a);
-        grid.print('C');
-        grid.execute(0x0d);
-        grid.execute(0x0a);
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("B".into()));
-        assert_eq!(grid.cell(1, 0).content, CellContent::Narrow("C".into()));
-    }
-
-    #[test]
-    fn test_alternate_screen_switch() {
-        let mut grid = Grid::new(24, 80);
-        let mut parser = Parser::new();
-        grid.print('A');
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
-        for &b in b"\x1b[?1049h" {
-            parser.advance(&mut grid, b);
-        }
-        assert!(grid.in_alternate);
-        assert_eq!(grid.cell(0, 0).content, CellContent::Empty);
-        for &b in b"\x1b[?1049l" {
-            parser.advance(&mut grid, b);
-        }
-        assert!(!grid.in_alternate);
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
-    }
-
-    #[test]
-    fn test_alternate_screen_restores_cursor() {
-        let mut grid = Grid::new(24, 80);
-        let mut parser = Parser::new();
-        grid.cursor_row = 5;
-        grid.cursor_col = 10;
-        for &b in b"\x1b[?1049h" {
-            parser.advance(&mut grid, b);
-        }
-        assert_eq!(grid.cursor_row, 0);
-        assert_eq!(grid.cursor_col, 0);
-        for &b in b"\x1b[?1049l" {
-            parser.advance(&mut grid, b);
-        }
-        assert_eq!(grid.cursor_row, 5);
-        assert_eq!(grid.cursor_col, 10);
-    }
-
-    #[test]
-    fn test_decscusr_set_cursor_style() {
-        let mut grid = Grid::new(24, 80);
-        let mut parser = Parser::new();
-        for &b in b"\x1b[4 q" {
-            parser.advance(&mut grid, b);
-        }
-        assert_eq!(grid.cursor_style, CursorStyle::Underline);
-        for &b in b"\x1b[2 q" {
-            parser.advance(&mut grid, b);
-        }
-        assert_eq!(grid.cursor_style, CursorStyle::Block);
-    }
-
-    #[test]
-    fn resize_grows_grid_and_preserves_cells() {
-        let mut grid = Grid::new(2, 3);
-
-        grid.put_char('A');
-
-        grid.cursor_row = 1;
-        grid.cursor_col = 1;
-        grid.put_char('B');
-
-        grid.resize(4, 5).unwrap();
-
-        assert_eq!(grid.rows, 4);
-        assert_eq!(grid.cols, 5);
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
-        assert_eq!(grid.cell(1, 1).content, CellContent::Narrow("B".into()));
-        assert_eq!(grid.cell(3, 4), &Cell::default());
-        assert_eq!(grid.dirty, vec![true; 4]);
-    }
-
-    #[test]
-    fn resize_shrinks_grid_and_clamps_cursor() {
-        let mut grid = Grid::new(4, 5);
-        grid.cursor_row = 3;
-        grid.cursor_col = 4;
-
-        grid.resize(2, 3).unwrap();
-
-        assert_eq!(grid.rows, 2);
-        assert_eq!(grid.cols, 3);
-        assert_eq!(grid.cursor_row, 1);
-        assert_eq!(grid.cursor_col, 2);
-        assert_eq!(grid.dirty, vec![true; 2]);
-    }
-
-    #[test]
-    fn resize_preserves_visible_intersection_when_shrinking() {
-        let mut grid = Grid::new(3, 4);
-        grid.cursor_row = 1;
-        grid.cursor_col = 2;
-        grid.put_char('X');
-
-        grid.resize(2, 3).unwrap();
-
-        assert_eq!(grid.cell(1, 2).content, CellContent::Narrow("X".into()));
-    }
-
-    #[test]
-    fn resize_updates_primary_and_alternate_buffers() {
-        let mut grid = Grid::new(2, 3);
-        let mut parser = Parser::new();
-
-        grid.put_char('P');
-
-        for &byte in b"\x1b[?1049h" {
-            parser.advance(&mut grid, byte);
-        }
-
-        grid.put_char('A');
-        grid.resize(4, 5).unwrap();
-
-        assert_eq!(grid.rows, 4);
-        assert_eq!(grid.cols, 5);
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
-        assert_eq!(grid.cell(3, 4), &Cell::default());
-
-        for &byte in b"\x1b[?1049l" {
-            parser.advance(&mut grid, byte);
-        }
-
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("P".into()));
-        assert_eq!(grid.cell(3, 4), &Cell::default());
-    }
-
-    #[test]
-    fn resize_rejects_zero_dimensions_without_mutating_grid() {
-        let mut grid = Grid::new(2, 3);
-        grid.put_char('A');
-
-        let error = grid.resize(0, 3).unwrap_err();
-
-        assert_eq!(error, TerminalError::InvalidSize { rows: 0, cols: 3 });
-        assert_eq!(grid.rows, 2);
-        assert_eq!(grid.cols, 3);
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
-    }
-
-    #[test]
-    fn resizing_to_same_dimensions_is_a_noop() {
-        let mut grid = Grid::new(2, 3);
-        grid.dirty.fill(false);
-
-        grid.resize(2, 3).unwrap();
-
-        assert_eq!(grid.dirty, vec![false; 2]);
-    }
-
-    #[test]
-    fn put_char_creates_narrow_content() {
-        let mut grid = Grid::new(2, 2);
-        grid.put_char('A');
-
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("A".into()));
-    }
-
-    #[test]
-    fn erasing_wide_continuation_erases_wide_leading() {
-        let mut grid = Grid::new(2, 4);
-        let style = CellStyle::default();
-        grid.cells[0].write_wide(1, "界".into(), style).unwrap();
-
-        grid.cursor_row = 0;
-        grid.cursor_col = 2;
-
-        grid.erase_line(0);
-
-        assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
-        assert_eq!(grid.cell(0, 2).content, CellContent::Empty);
-    }
-
-    #[test]
-    fn erasing_wide_leading_erases_wide_continuation() {
-        let mut grid = Grid::new(2, 4);
-
-        let style = CellStyle::default();
-        grid.cells[0].write_wide(1, "界".into(), style).unwrap();
-
-        grid.cursor_row = 0;
-        grid.cursor_col = 1;
-
-        grid.erase_line(1);
-
-        assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
-        assert_eq!(grid.cell(0, 2).content, CellContent::Empty);
-    }
-
-    #[test]
-    fn resize_clears_wide_leading_when_continuation_is_truncated() {
-        let mut grid = Grid::new(1, 3);
-
-        let style = CellStyle::default();
-
-        grid.cells[0].write_wide(1, "界".into(), style).unwrap();
-
-        grid.resize(1, 2).unwrap();
-
-        assert_eq!(grid.rows, 1);
-        assert_eq!(grid.cols, 2);
-        assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
-    }
-
-    #[test]
-    fn resize_clears_wide_leading_when_continuation_is_truncated_in_alternate() {
-        let mut grid = Grid::new(1, 3);
-
-        let style = CellStyle::default();
-        grid.cells[0].write_narrow(0, "P".into(), style);
-
-        grid.enter_alternate_screen();
-
-        grid.cells[0].write_wide(1, "界".into(), style).unwrap();
-
-        grid.resize(1, 2).unwrap();
-
-        assert_eq!(grid.rows, 1);
-        assert_eq!(grid.cols, 2);
-        assert_eq!(grid.cell(0, 1).content, CellContent::Empty);
-
-        grid.leave_alternate_screen();
-
-        assert_eq!(grid.cell(0, 0).content, CellContent::Narrow("P".into()));
-    }
-
-    #[test]
-    fn printed_cells_retain_style_after_current_style_changes() {
-        let mut grid = Grid::new(2, 8);
-        let mut parser = Parser::new();
-        // \x1b[32m - green foreground
-        for &b in b"\x1b[32m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('A');
-
-        for &b in b"\x1b[0m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('B');
-
-        assert!(matches!(grid.cell(0, 0).style.fg, Color::Indexed(2)));
-        assert!(matches!(grid.cell(0, 1).style.fg, Color::Default));
-    }
-
-    #[test]
-    fn sgr_enables_single_attr() {
-        let mut grid = Grid::new(2, 8);
-        let mut parser = Parser::new();
-        for &b in b"\x1b[1m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('A');
-        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
-    }
-
-    #[test]
-    fn sgr_enables_multiple_attrs() {
-        let mut grid = Grid::new(2, 8);
-        let mut parser = Parser::new();
-        for &b in b"\x1b[1;3;4m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('A');
-        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
-        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::ITALIC));
-        assert_eq!(
-            grid.cell(0, 0).style.underline_style,
-            UnderlineStyle::Single
-        );
-    }
-
-    #[test]
-    fn sgr_selective_reset_preserves_other_attrs() {
-        let mut grid = Grid::new(2, 8);
-        let mut parser = Parser::new();
-        for &b in b"\x1b[1;3;4m" {
-            parser.advance(&mut grid, b);
-        }
-        for &b in b"\x1b[23m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('A');
-        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
-        assert_eq!(
-            grid.cell(0, 0).style.underline_style,
-            UnderlineStyle::Single
-        );
-        assert!(!grid.cell(0, 0).style.flags.contains(CellFlags::ITALIC));
-    }
-
-    #[test]
-    fn sgr_22_resets_bold_and_dim() {
-        let mut grid = Grid::new(2, 8);
-        let mut parser = Parser::new();
-        for &b in b"\x1b[1;2;4m" {
-            parser.advance(&mut grid, b);
-        }
-        for &b in b"\x1b[22m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('A');
-        assert_eq!(
-            grid.cell(0, 0).style.underline_style,
-            UnderlineStyle::Single
-        );
-        assert!(!grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
-        assert!(!grid.cell(0, 0).style.flags.contains(CellFlags::DIM));
-    }
-
-    #[test]
-    fn sgr_zero_resets_entire_style() {
-        let mut grid = Grid::new(2, 8);
-        let mut parser = Parser::new();
-        for &b in b"\x1b[31;1;3m" {
-            parser.advance(&mut grid, b);
-        }
-        for &b in b"\x1b[0m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('A');
-        assert_eq!(grid.cell(0, 0).style.fg, Color::Default);
-        assert_eq!(grid.cell(0, 0).style.bg, Color::Default);
-        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::empty()));
-    }
-
-    #[test]
-    fn printed_cells_retain_flags_after_selective_reset() {
-        let mut grid = Grid::new(2, 8);
-        let mut parser = Parser::new();
-        for &b in b"\x1b[1m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('A');
-        for &b in b"\x1b[22m" {
-            parser.advance(&mut grid, b);
-        }
-        grid.print('B');
-
-        assert!(grid.cell(0, 0).style.flags.contains(CellFlags::BOLD));
-        assert!(!grid.cell(0, 1).style.flags.contains(CellFlags::BOLD));
-    }
-}
+mod tests;

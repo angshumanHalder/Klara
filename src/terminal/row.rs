@@ -1,4 +1,4 @@
-use crate::terminal::cell::{Cell, CellContent, CellStyle};
+use crate::terminal::cell::{Cell, CellContent, CellStyle, HyperlinkId};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub(super) enum RowError {
@@ -70,11 +70,18 @@ impl Row {
         self.cells.fill(Cell::default());
     }
 
-    pub(super) fn write_narrow(&mut self, col: usize, text: String, style: CellStyle) {
+    pub(super) fn write_narrow(
+        &mut self,
+        col: usize,
+        text: String,
+        style: CellStyle,
+        hyperlink: Option<HyperlinkId>,
+    ) {
         self.clear_cell(col);
         self.cells[col] = Cell {
             content: CellContent::Narrow(text),
             style,
+            hyperlink,
         }
     }
 
@@ -83,6 +90,7 @@ impl Row {
         col: usize,
         text: String,
         style: CellStyle,
+        hyperlink: Option<HyperlinkId>,
     ) -> Result<(), RowError> {
         if col >= self.cells.len() || col + 1 >= self.cells.len() {
             Err(RowError::WideCellDoesNotFit {
@@ -95,10 +103,12 @@ impl Row {
             self.cells[col] = Cell {
                 content: CellContent::WideLeading(text),
                 style,
+                hyperlink,
             };
             self.cells[col + 1] = Cell {
                 content: CellContent::WideContinuation,
                 style,
+                hyperlink,
             };
             Ok(())
         }
@@ -134,6 +144,7 @@ mod test {
                 flags: CellFlags::empty(),
                 ..CellStyle::default()
             },
+            None,
         )
         .unwrap();
 
@@ -155,6 +166,7 @@ mod test {
                 flags: CellFlags::empty(),
                 ..CellStyle::default()
             },
+            None,
         )
         .unwrap();
 
@@ -176,6 +188,7 @@ mod test {
                 flags: CellFlags::empty(),
                 ..CellStyle::default()
             },
+            None,
         )
         .unwrap();
 
@@ -197,6 +210,7 @@ mod test {
                 flags: CellFlags::empty(),
                 ..CellStyle::default()
             },
+            None,
         );
 
         row.resize(4);
@@ -221,6 +235,7 @@ mod test {
                 flags: CellFlags::empty(),
                 ..CellStyle::default()
             },
+            None,
         )
         .unwrap();
         row.write_narrow(
@@ -232,6 +247,7 @@ mod test {
                 flags: CellFlags::empty(),
                 ..CellStyle::default()
             },
+            None,
         );
 
         assert_eq!(row.cell(1).content, CellContent::Narrow("A".into()));
@@ -250,6 +266,7 @@ mod test {
                 flags: CellFlags::empty(),
                 ..CellStyle::default()
             },
+            None,
         )
         .unwrap();
         row.write_narrow(
@@ -261,6 +278,7 @@ mod test {
                 flags: CellFlags::empty(),
                 ..CellStyle::default()
             },
+            None,
         );
 
         assert_eq!(row.cell(1).content, CellContent::Empty);
@@ -278,7 +296,7 @@ mod test {
             ..CellStyle::default()
         };
 
-        row.write_wide(1, "界".into(), style).unwrap();
+        row.write_wide(1, "界".into(), style, None).unwrap();
 
         assert_eq!(row.cell(1).content, CellContent::WideLeading("界".into()));
         assert_eq!(row.cell(2).content, CellContent::WideContinuation);
@@ -295,8 +313,8 @@ mod test {
             ..CellStyle::default()
         };
 
-        row.write_wide(1, "猫".into(), style).unwrap();
-        row.write_wide(1, "好".into(), style).unwrap();
+        row.write_wide(1, "猫".into(), style, None).unwrap();
+        row.write_wide(1, "好".into(), style, None).unwrap();
 
         assert_eq!(row.cell(1).content, CellContent::WideLeading("好".into()));
         assert_eq!(row.cell(2).content, CellContent::WideContinuation);
@@ -313,8 +331,8 @@ mod test {
             ..CellStyle::default()
         };
 
-        row.write_wide(2, "猫".into(), style).unwrap();
-        row.write_wide(1, "好".into(), style).unwrap();
+        row.write_wide(2, "猫".into(), style, None).unwrap();
+        row.write_wide(1, "好".into(), style, None).unwrap();
 
         assert_eq!(row.cell(1).style.fg, Color::Indexed(2));
         assert_eq!(row.cell(1).style.bg, Color::Rgb(10, 20, 30));
@@ -337,9 +355,9 @@ mod test {
             ..CellStyle::default()
         };
 
-        row.write_narrow(2, "A".into(), style);
+        row.write_narrow(2, "A".into(), style, None);
 
-        let error = row.write_wide(2, "猫".into(), style).unwrap_err();
+        let error = row.write_wide(2, "猫".into(), style, None).unwrap_err();
 
         assert_eq!(error, RowError::WideCellDoesNotFit { col: 2, len: 3 });
 
@@ -358,11 +376,34 @@ mod test {
             ..CellStyle::default()
         };
 
-        row.write_narrow(1, "A".into(), style);
+        row.write_narrow(1, "A".into(), style, None);
 
         row.clear();
 
         assert!(row.is_blank());
         assert_eq!(row.len(), 2);
+    }
+
+    #[test]
+    fn narrow_write_preserves_hyperlink() {
+        let mut row = Row::new(2);
+        let style = CellStyle {
+            ..Default::default()
+        };
+        row.write_narrow(0, "A".into(), style, Some(HyperlinkId(7)));
+        assert_eq!(row.cell(0).hyperlink, Some(HyperlinkId(7)));
+    }
+
+    #[test]
+    fn wide_write_applies_hyperlink_to_both_cells() {
+        let mut row = Row::new(4);
+        let style = CellStyle {
+            ..Default::default()
+        };
+        row.write_wide(1, "猫".into(), style, Some(HyperlinkId(7)))
+            .unwrap();
+
+        assert_eq!(row.cell(1).hyperlink, Some(HyperlinkId(7)));
+        assert_eq!(row.cell(2).hyperlink, Some(HyperlinkId(7)));
     }
 }

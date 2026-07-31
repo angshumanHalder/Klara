@@ -35,10 +35,14 @@ impl CellContent {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HyperlinkId(pub usize);
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
     pub content: CellContent,
     pub style: CellStyle,
+    pub hyperlink: Option<HyperlinkId>,
 }
 
 impl Default for Cell {
@@ -46,6 +50,7 @@ impl Default for Cell {
         Cell {
             content: CellContent::Empty,
             style: CellStyle::default(),
+            hyperlink: None,
         }
     }
 }
@@ -194,5 +199,19 @@ mod test {
 
         assert!(style.flags.is_empty());
         assert!(copied_style.flags.contains(CellFlags::BLINK));
+    }
+
+    #[test]
+    fn default_cell_has_no_hyperlink() {
+        assert_eq!(Cell::default().hyperlink, None);
+    }
+
+    #[test]
+    fn cell_can_reference_a_hyperlink() {
+        let cell = Cell {
+            hyperlink: Some(HyperlinkId(7)),
+            ..Default::default()
+        };
+        assert_eq!(cell.hyperlink, Some(HyperlinkId(7)));
     }
 }
