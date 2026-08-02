@@ -9,7 +9,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 use thiserror::Error;
 use winit::window::Window;
 
-use crate::terminal::{TerminalError, grid::Grid};
+use crate::terminal::{Terminal, TerminalError};
 
 #[derive(Debug, Error)]
 pub enum PaneError {
@@ -66,7 +66,7 @@ pub enum PaneState {
 
 pub struct Pane {
     pub id: String,
-    pub grid: Arc<Mutex<Grid>>,
+    pub grid: Arc<Mutex<Terminal>>,
     pub rows: usize,
     pub cols: usize,
 
@@ -127,7 +127,7 @@ impl Pane {
                 source,
             })?;
 
-        let grid = Arc::new(Mutex::new(Grid::new(rows, cols)));
+        let grid = Arc::new(Mutex::new(Terminal::new(rows, cols)));
         let state = Arc::new(Mutex::new(PaneState::Running));
         let shutting_down = Arc::new(AtomicBool::new(false));
 
@@ -405,7 +405,7 @@ fn pty_size(
 
 fn spawn_reader(
     mut reader: Box<dyn Read + Send>,
-    grid: Arc<Mutex<Grid>>,
+    grid: Arc<Mutex<Terminal>>,
     state: Arc<Mutex<PaneState>>,
     shutting_down: Arc<AtomicBool>,
     window: Option<Arc<Window>>,

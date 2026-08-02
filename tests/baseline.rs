@@ -1,8 +1,8 @@
 use klara::{
     config::Config,
     terminal::{
+        CursorStyle, Terminal,
         cell::{Cell, CellContent, Color},
-        grid::{CursorStyle, Grid},
     },
 };
 
@@ -19,21 +19,21 @@ fn default_configuration_is_valid() {
 
 #[test]
 fn new_grid_has_valid_initial_state() {
-    let grid = Grid::new(24, 80);
+    let terminal = Terminal::new(24, 80);
 
-    assert_eq!(grid.rows, 24);
-    assert_eq!(grid.cols, 80);
-    assert_eq!(grid.cursor_row, 0);
-    assert_eq!(grid.cursor_col, 0);
-    assert_eq!(grid.cursor_style, CursorStyle::Block);
-    assert!(grid.cursor_visible);
-    assert!(!grid.in_alternate);
-    assert!(!grid.application_cursor);
-    assert!(!grid.sgr_mouse);
+    assert_eq!(terminal.rows, 24);
+    assert_eq!(terminal.cols, 80);
+    assert_eq!(terminal.cursor_row(), 0);
+    assert_eq!(terminal.cursor_col(), 0);
+    assert_eq!(terminal.cursor_style, CursorStyle::Block);
+    assert!(terminal.cursor_visible);
+    assert!(!terminal.in_alternate_screen());
+    assert!(!terminal.application_cursor);
+    assert!(!terminal.sgr_mouse);
 
-    for row in 0..grid.rows {
-        for col in 0..grid.cols {
-            assert_eq!(grid.cell(row, col), &Cell::default());
+    for row in 0..terminal.rows {
+        for col in 0..terminal.cols {
+            assert_eq!(terminal.cell(row, col), &Cell::default());
         }
     }
 }

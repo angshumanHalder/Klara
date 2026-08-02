@@ -1,8 +1,10 @@
 use thiserror::Error;
 
 pub mod cell;
-pub mod grid;
+pub use emulator::{CursorStyle, Terminal};
+mod emulator;
 mod row;
+mod screen;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TerminalError {

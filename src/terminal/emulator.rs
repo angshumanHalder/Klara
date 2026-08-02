@@ -1,5 +1,5 @@
 use crate::terminal::cell::{CellFlags, CellStyle, HyperlinkId, UnderlineStyle};
-use crate::terminal::row::Row;
+use crate::terminal::screen::{Cursor, Screen};
 
 use super::TerminalError;
 
@@ -14,25 +14,28 @@ pub enum CursorStyle {
     Bar,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScreenKind {
+    Primary,
+    Alternate,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hyperlink {
     pub uri: String,
     pub osc_id: Option<String>,
 }
 
-pub struct Grid {
-    saved_cursor: (usize, usize),
-    cells: Vec<Row>,
+pub struct Terminal {
+    primary: Screen,
+    alternate: Screen,
+    active_screen: ScreenKind,
     current_style: CellStyle,
-    alternate: Vec<Row>,
     active_hyperlink: Option<HyperlinkId>,
     hyperlinks: Vec<Hyperlink>,
 
     pub rows: usize,
     pub cols: usize,
-    pub cursor_row: usize,
-    pub cursor_col: usize,
-    pub in_alternate: bool,
     pub cursor_style: CursorStyle,
     pub cursor_visible: bool,
     pub application_cursor: bool,
@@ -40,20 +43,17 @@ pub struct Grid {
     pub dirty: Vec<bool>,
 }
 
-impl Grid {
+impl Terminal {
     pub fn new(rows: usize, cols: usize) -> Self {
-        Grid {
+        Terminal {
             rows,
             cols,
-            cells: new_buffer(rows, cols),
-            cursor_row: 0,
-            cursor_col: 0,
+            primary: Screen::new(rows, cols),
+            alternate: Screen::new(rows, cols),
+            active_screen: ScreenKind::Primary,
             current_style: CellStyle::default(),
-            alternate: new_buffer(rows, cols),
-            in_alternate: false,
             active_hyperlink: None,
             hyperlinks: Vec::new(),
-            saved_cursor: (0, 0),
             cursor_style: CursorStyle::Block,
             application_cursor: false,
             sgr_mouse: false,
@@ -74,45 +74,51 @@ impl Grid {
             return Ok(());
         }
 
-        resize_buffer(&mut self.cells, new_rows, new_cols);
-        resize_buffer(&mut self.alternate, new_rows, new_cols);
-
+        self.primary.resize(new_rows, new_cols);
+        self.alternate.resize(new_rows, new_cols);
         self.rows = new_rows;
         self.cols = new_cols;
-
-        self.cursor_row = self.cursor_row.min(new_rows - 1);
-        self.cursor_col = self.cursor_col.min(new_cols - 1);
-
-        self.saved_cursor.0 = self.saved_cursor.0.min(new_rows - 1);
-        self.saved_cursor.1 = self.saved_cursor.1.min(new_cols - 1);
-
         self.dirty = vec![true; new_rows];
 
         Ok(())
     }
 
     pub fn cell(&self, row: usize, col: usize) -> &Cell {
-        self.cells[row].cell(col)
+        self.active_screen().cell(row, col)
     }
 
     pub fn put_char(&mut self, ch: char) {
-        if self.cursor_row < self.rows && self.cursor_col < self.cols {
-            self.cells[self.cursor_row].write_narrow(
-                self.cursor_col,
+        let cursor = self.active_screen().cursor();
+        let row = cursor.row;
+        let col = cursor.col;
+        let style = self.current_style;
+        let hyperlink = self.active_hyperlink;
+        if row < self.rows && col < self.cols {
+            self.active_screen_mut().row_mut(row).write_narrow(
+                col,
                 ch.to_string(),
-                self.current_style,
-                self.active_hyperlink,
+                style,
+                hyperlink,
             );
-            self.dirty[self.cursor_row] = true;
+            self.dirty[row] = true;
         }
-        self.cursor_col += 1;
-        if self.cursor_col >= self.cols {
-            self.cursor_col = 0;
-            self.cursor_row += 1;
-            if self.cursor_row >= self.rows {
-                self.scroll_up();
-                self.cursor_row = self.rows - 1;
+        let rows = self.rows;
+        let cols = self.cols;
+        let mut should_scroll = false;
+        {
+            let cursor = self.cursor_mut();
+            cursor.col += 1;
+            if cursor.col >= cols {
+                cursor.col = 0;
+                cursor.row += 1;
+                if cursor.row >= rows {
+                    cursor.row = rows - 1;
+                    should_scroll = true;
+                }
             }
+        }
+        if should_scroll {
+            self.scroll_up();
         }
     }
 
@@ -120,17 +126,28 @@ impl Grid {
         self.hyperlinks.get(id.0).map(|link| link.uri.as_str())
     }
 
+    pub fn in_alternate_screen(&self) -> bool {
+        self.active_screen == ScreenKind::Alternate
+    }
+
+    pub fn cursor_row(&self) -> usize {
+        self.active_screen().cursor().row
+    }
+
+    pub fn cursor_col(&self) -> usize {
+        self.active_screen().cursor().col
+    }
+
     fn scroll_up(&mut self) {
-        self.cells.remove(0);
-        self.cells.push(Row::new(self.cols));
+        self.active_screen_mut().scroll_up();
         self.dirty.fill(true);
     }
 
     fn erase_line(&mut self, mode: u16) {
-        let row = self.cursor_row;
+        let row = self.cursor_row();
         match mode {
-            0 => (self.cursor_col..self.cols).for_each(|c| self.clear_cell(row, c)),
-            1 => (0..=self.cursor_col).for_each(|c| self.clear_cell(row, c)),
+            0 => (self.cursor_col()..self.cols).for_each(|c| self.clear_cell(row, c)),
+            1 => (0..=self.cursor_col()).for_each(|c| self.clear_cell(row, c)),
             2 => (0..self.cols).for_each(|c| self.clear_cell(row, c)),
             _ => {}
         }
@@ -140,30 +157,28 @@ impl Grid {
         match mode {
             0 => {
                 self.erase_line(0);
-                for r in (self.cursor_row + 1)..self.rows {
-                    let was_blank = self.cells[r].is_blank();
+                for r in (self.cursor_row() + 1)..self.rows {
+                    let was_blank = self.active_screen().row(r).is_blank();
                     if was_blank {
                         continue;
                     }
-                    self.cells[r].clear();
+                    self.active_screen_mut().row_mut(r).clear();
                     self.dirty[r] = true;
                 }
             }
             1 => {
-                for r in 0..self.cursor_row {
-                    let was_blank = self.cells[r].is_blank();
+                for r in 0..self.cursor_row() {
+                    let was_blank = self.active_screen().row(r).is_blank();
                     if was_blank {
                         continue;
                     }
-                    self.cells[r].clear();
+                    self.active_screen_mut().row_mut(r).clear();
                     self.dirty[r] = true;
                 }
                 self.erase_line(1);
             }
             2 | 3 => {
-                for r in 0..self.rows {
-                    self.cells[r].clear();
-                }
+                self.active_screen_mut().clear();
                 self.dirty.fill(true);
             }
             _ => {}
@@ -171,21 +186,22 @@ impl Grid {
     }
 
     fn enter_alternate_screen(&mut self) {
-        self.saved_cursor = (self.cursor_row, self.cursor_col);
-        std::mem::swap(&mut self.cells, &mut self.alternate);
-        for row in &mut self.cells {
-            row.clear();
+        if self.active_screen == ScreenKind::Alternate {
+            return;
         }
-        self.cursor_row = 0;
-        self.cursor_col = 0;
-        self.in_alternate = true;
+        self.primary.save_cursor();
+        self.active_screen = ScreenKind::Alternate;
+        self.alternate.clear();
+        self.alternate.reset_cursor();
         self.dirty.fill(true);
     }
 
     fn leave_alternate_screen(&mut self) {
-        std::mem::swap(&mut self.cells, &mut self.alternate);
-        (self.cursor_row, self.cursor_col) = self.saved_cursor;
-        self.in_alternate = false;
+        if self.active_screen == ScreenKind::Primary {
+            return;
+        }
+        self.active_screen = ScreenKind::Primary;
+        self.primary.restore_cursor();
         self.dirty.fill(true);
     }
 
@@ -279,7 +295,7 @@ impl Grid {
     }
 
     fn clear_cell(&mut self, row: usize, col: usize) {
-        self.cells[row].clear_cell(col);
+        self.active_screen_mut().row_mut(row).clear_cell(col);
         self.dirty[row] = true;
     }
 
@@ -299,20 +315,24 @@ impl Grid {
     fn close_hyperlink(&mut self) {
         self.active_hyperlink = None;
     }
-}
 
-fn new_buffer(rows: usize, cols: usize) -> Vec<Row> {
-    (0..rows).map(|_| Row::new(cols)).collect()
-}
-
-fn resize_buffer(buffer: &mut Vec<Row>, new_rows: usize, new_cols: usize) {
-    buffer.truncate(new_rows);
-
-    for row in buffer.iter_mut() {
-        row.resize(new_cols);
+    fn active_screen(&self) -> &Screen {
+        match self.active_screen {
+            ScreenKind::Primary => &self.primary,
+            ScreenKind::Alternate => &self.alternate,
+        }
     }
 
-    buffer.resize_with(new_rows, || Row::new(new_cols));
+    fn active_screen_mut(&mut self) -> &mut Screen {
+        match self.active_screen {
+            ScreenKind::Primary => &mut self.primary,
+            ScreenKind::Alternate => &mut self.alternate,
+        }
+    }
+
+    fn cursor_mut(&mut self) -> &mut Cursor {
+        self.active_screen_mut().cursor_mut()
+    }
 }
 
 fn parse_sgr_color(param: &[u16], iter: &mut ParamsIter<'_>) -> Option<Color> {
@@ -345,7 +365,7 @@ fn next_sgr_byte(param: Option<&[u16]>) -> Option<u8> {
     u8::try_from(value).ok()
 }
 
-impl Perform for Grid {
+impl Perform for Terminal {
     fn print(&mut self, ch: char) {
         self.put_char(ch);
     }
@@ -353,17 +373,26 @@ impl Perform for Grid {
     fn execute(&mut self, byte: u8) {
         match byte {
             0x0a | 0x0b | 0x0c => {
-                self.cursor_row += 1;
-                if self.cursor_row >= self.rows {
+                let rows = self.rows;
+                let should_scroll = {
+                    let cursor = self.cursor_mut();
+                    cursor.row += 1;
+
+                    if cursor.row >= rows {
+                        cursor.row = rows - 1;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if should_scroll {
                     self.scroll_up();
-                    self.cursor_row = self.rows - 1;
                 }
             }
-            0x0d => self.cursor_col = 0,
+            0x0d => self.cursor_mut().col = 0,
             0x08 => {
-                if self.cursor_col > 0 {
-                    self.cursor_col -= 1
-                }
+                let cursor = self.cursor_mut();
+                cursor.col = cursor.col.saturating_sub(1);
             }
             _ => {}
         }
@@ -374,14 +403,29 @@ impl Perform for Grid {
         let p0 = p.first().copied().unwrap_or(0);
         let p1 = p.get(1).copied().unwrap_or(0);
         match action {
-            'A' => self.cursor_row = self.cursor_row.saturating_sub(p0.max(1) as usize),
-            'B' => self.cursor_row = (self.cursor_row + p0.max(1) as usize).min(self.rows - 1),
-            'C' => self.cursor_col = (self.cursor_col + p0.max(1) as usize).min(self.cols - 1),
-            'D' => self.cursor_col = self.cursor_col.saturating_sub(p0.max(1) as usize),
-            'G' => self.cursor_col = (p0.saturating_sub(1) as usize).min(self.cols - 1),
+            'A' => {
+                let row = self.cursor_row().saturating_sub(p0.max(1) as usize);
+                self.cursor_mut().row = row;
+            }
+            'B' => {
+                let row = (self.cursor_row() + p0.max(1) as usize).min(self.rows - 1);
+                self.cursor_mut().row = row;
+            }
+            'C' => {
+                let col = (self.cursor_col() + p0.max(1) as usize).min(self.cols - 1);
+                self.cursor_mut().col = col;
+            }
+            'D' => {
+                let col = self.cursor_col().saturating_sub(p0.max(1) as usize);
+                self.cursor_mut().col = col;
+            }
+            'G' => self.cursor_mut().col = (p0.saturating_sub(1) as usize).min(self.cols - 1),
             'H' | 'f' => {
-                self.cursor_row = (p0.saturating_sub(1) as usize).min(self.rows - 1);
-                self.cursor_col = (p1.saturating_sub(1) as usize).min(self.cols - 1);
+                let rows = self.rows;
+                let cols = self.cols;
+                let cursor = self.cursor_mut();
+                cursor.row = (p0.saturating_sub(1) as usize).min(rows - 1);
+                cursor.col = (p1.saturating_sub(1) as usize).min(cols - 1);
             }
             'J' => self.erase_display(p0),
             'K' => self.erase_line(p0),
