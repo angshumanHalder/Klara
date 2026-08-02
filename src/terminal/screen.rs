@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::terminal::{cell::Cell, row::Row};
 
 pub(super) struct Screen {
@@ -41,12 +43,13 @@ impl Screen {
         }
     }
 
-    pub(super) fn scroll_up(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        self.rows.rotate_left(1);
-        self.rows.last_mut().unwrap().clear();
+    pub(super) fn scroll_up(&mut self, region: Range<usize>) {
+        debug_assert!(region.start < region.end);
+        debug_assert!(region.end <= self.rows.len());
+
+        let bottom = region.end - 1;
+        self.rows[region].rotate_left(1);
+        self.rows[bottom].clear();
     }
 
     pub(super) fn resize(&mut self, new_rows: usize, new_cols: usize) {
@@ -153,6 +156,50 @@ mod test {
         assert_eq!(
             screen.rows[0].cell(1).content,
             CellContent::Narrow("A".into())
+        );
+    }
+
+    #[test]
+    fn save_and_restore_cursor() {
+        let mut screen = Screen::new(3, 4);
+        screen.cursor = Cursor { row: 0, col: 1 };
+        screen.save_cursor();
+        screen.cursor = Cursor { row: 1, col: 2 };
+        screen.restore_cursor();
+        assert_eq!(screen.cursor, Cursor { row: 0, col: 1 });
+    }
+
+    #[test]
+    fn reset_cursor_preserves_saved_cursor() {
+        let mut screen = Screen::new(3, 4);
+        screen.cursor = Cursor { row: 0, col: 1 };
+        screen.save_cursor();
+        screen.reset_cursor();
+        assert_eq!(screen.cursor, Cursor::default());
+        screen.restore_cursor();
+        assert_eq!(screen.cursor, Cursor { row: 0, col: 1 });
+    }
+
+    #[test]
+    fn scroll_up_only_changes_rows_inside_region() {
+        let mut screen = Screen::new(4, 2);
+        for (row, ch) in ['A', 'B', 'C', 'D'].into_iter().enumerate() {
+            screen.rows[row].write_narrow(0, ch.into(), CellStyle::default(), None);
+        }
+        screen.scroll_up(1..3);
+
+        assert_eq!(
+            screen.rows[0].cell(0).content,
+            CellContent::Narrow("A".into())
+        );
+        assert_eq!(
+            screen.rows[1].cell(0).content,
+            CellContent::Narrow("C".into())
+        );
+        assert_eq!(screen.rows[2].cell(0).content, CellContent::Empty);
+        assert_eq!(
+            screen.rows[3].cell(0).content,
+            CellContent::Narrow("D".into())
         );
     }
 }

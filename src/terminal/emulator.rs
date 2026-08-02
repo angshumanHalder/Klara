@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::terminal::cell::{CellFlags, CellStyle, HyperlinkId, UnderlineStyle};
 use crate::terminal::screen::{Cursor, Screen};
 
@@ -33,6 +35,7 @@ pub struct Terminal {
     current_style: CellStyle,
     active_hyperlink: Option<HyperlinkId>,
     hyperlinks: Vec<Hyperlink>,
+    scroll_region: Range<usize>,
 
     pub rows: usize,
     pub cols: usize,
@@ -54,6 +57,7 @@ impl Terminal {
             current_style: CellStyle::default(),
             active_hyperlink: None,
             hyperlinks: Vec::new(),
+            scroll_region: 0..rows,
             cursor_style: CursorStyle::Block,
             application_cursor: false,
             sgr_mouse: false,
@@ -78,6 +82,7 @@ impl Terminal {
         self.alternate.resize(new_rows, new_cols);
         self.rows = new_rows;
         self.cols = new_cols;
+        self.scroll_region = 0..new_rows;
         self.dirty = vec![true; new_rows];
 
         Ok(())
@@ -139,8 +144,9 @@ impl Terminal {
     }
 
     fn scroll_up(&mut self) {
-        self.active_screen_mut().scroll_up();
-        self.dirty.fill(true);
+        let region = self.scroll_region.clone();
+        self.active_screen_mut().scroll_up(region.clone());
+        self.dirty[region].fill(true);
     }
 
     fn erase_line(&mut self, mode: u16) {
@@ -333,6 +339,38 @@ impl Terminal {
     fn cursor_mut(&mut self) -> &mut Cursor {
         self.active_screen_mut().cursor_mut()
     }
+
+    fn set_scroll_region(&mut self, top: u16, bottom: u16) {
+        let mut top = top as usize;
+        let mut bottom = bottom as usize;
+        if top == 0 {
+            top = 1;
+        }
+        if bottom == 0 {
+            bottom = self.rows;
+        }
+
+        if top >= bottom {
+            return;
+        }
+        if bottom > self.rows {
+            return;
+        }
+
+        self.scroll_region = top - 1..bottom;
+        self.active_screen_mut().reset_cursor();
+    }
+
+    fn line_feed(&mut self) {
+        let rows = self.rows;
+        let scroll_region = self.scroll_region.clone();
+        let cursor = self.cursor_mut();
+        if cursor.row == scroll_region.end - 1 {
+            self.scroll_up();
+        } else if cursor.row < rows - 1 {
+            cursor.row += 1;
+        }
+    }
 }
 
 fn parse_sgr_color(param: &[u16], iter: &mut ParamsIter<'_>) -> Option<Color> {
@@ -373,21 +411,7 @@ impl Perform for Terminal {
     fn execute(&mut self, byte: u8) {
         match byte {
             0x0a | 0x0b | 0x0c => {
-                let rows = self.rows;
-                let should_scroll = {
-                    let cursor = self.cursor_mut();
-                    cursor.row += 1;
-
-                    if cursor.row >= rows {
-                        cursor.row = rows - 1;
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if should_scroll {
-                    self.scroll_up();
-                }
+                self.line_feed();
             }
             0x0d => self.cursor_mut().col = 0,
             0x08 => {
@@ -451,6 +475,9 @@ impl Perform for Terminal {
                     5 | 6 => CursorStyle::Bar,
                     _ => CursorStyle::Block,
                 }
+            }
+            'r' if intermediates.is_empty() => {
+                self.set_scroll_region(p0, p1);
             }
             _ => {}
         }

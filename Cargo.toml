@@ -2,6 +2,9 @@
 name = "klara"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "A terminal emulator for Apple-silicon Macs"
+license = "MIT"
 
 [dependencies]
 winit = "0.30"
