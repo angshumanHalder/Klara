@@ -829,3 +829,46 @@ fn line_feed_at_bottom_margin_scrolls_region() {
     assert_eq!(term.cursor_row(), 2);
     assert_eq!(term.cursor_col(), 1);
 }
+
+#[test]
+fn wrapping_at_bottom_margin_scrolls_region() {
+    let mut term = Terminal::new(4, 2);
+
+    for (row, ch) in ['A', 'B', 'C', 'D'].into_iter().enumerate() {
+        term.active_screen_mut().row_mut(row).write_narrow(
+            0,
+            ch.into(),
+            CellStyle::default(),
+            None,
+        );
+    }
+
+    term.cursor_mut().row = 2;
+    term.cursor_mut().col = 1;
+    term.scroll_region = 1..3;
+    term.put_char('Z');
+
+    assert_eq!(term.cell(0, 0).content, CellContent::Narrow("A".into()));
+    assert_eq!(term.cell(1, 0).content, CellContent::Narrow("C".into()));
+    assert_eq!(term.cell(1, 1).content, CellContent::Narrow("Z".into()));
+    assert_eq!(term.cell(2, 0).content, CellContent::Empty);
+    assert_eq!(term.cell(3, 0).content, CellContent::Narrow("D".into()));
+
+    assert_eq!(term.cursor_row(), 2);
+    assert_eq!(term.cursor_col(), 0);
+}
+
+#[test]
+fn decawm_can_be_disabled_and_reenabled() {
+    let mut term = Terminal::new(4, 2);
+    let mut parser = Parser::new();
+    assert!(term.modes.auto_wrap);
+    for &b in b"\x1b[?7l" {
+        parser.advance(&mut term, b);
+    }
+    assert!(!term.modes.auto_wrap);
+    for &b in b"\x1b[?7h" {
+        parser.advance(&mut term, b);
+    }
+    assert!(term.modes.auto_wrap);
+}

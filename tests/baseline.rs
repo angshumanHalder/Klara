@@ -10,8 +10,6 @@ use klara::{
 fn default_configuration_is_valid() {
     let config = Config::default();
 
-    assert!(!config.font.family.trim().is_empty());
-    assert!(config.font.size > 0.0);
     assert!(config.window.width > 0);
     assert!(config.window.height > 0);
     assert!((0.0..=1.0).contains(&config.window.opacity));
@@ -26,10 +24,7 @@ fn new_grid_has_valid_initial_state() {
     assert_eq!(terminal.cursor_row(), 0);
     assert_eq!(terminal.cursor_col(), 0);
     assert_eq!(terminal.cursor_style, CursorStyle::Block);
-    assert!(terminal.cursor_visible);
     assert!(!terminal.in_alternate_screen());
-    assert!(!terminal.application_cursor);
-    assert!(!terminal.sgr_mouse);
 
     for row in 0..terminal.rows {
         for col in 0..terminal.cols {

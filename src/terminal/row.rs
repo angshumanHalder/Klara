@@ -1,11 +1,5 @@
 use crate::terminal::cell::{Cell, CellContent, CellStyle, HyperlinkId};
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub(super) enum RowError {
-    #[error("wide cell at column {col} does not fit in row of length {len}")]
-    WideCellDoesNotFit { col: usize, len: usize },
-}
-
 pub(super) struct Row {
     cells: Vec<Cell>,
 }
@@ -57,6 +51,7 @@ impl Row {
         self.cells.resize(new_cols, Cell::default());
     }
 
+    #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.cells.len()
     }
@@ -85,18 +80,16 @@ impl Row {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn write_wide(
         &mut self,
         col: usize,
         text: String,
         style: CellStyle,
         hyperlink: Option<HyperlinkId>,
-    ) -> Result<(), RowError> {
+    ) -> Result<(), ()> {
         if col >= self.cells.len() || col + 1 >= self.cells.len() {
-            Err(RowError::WideCellDoesNotFit {
-                col,
-                len: self.cells.len(),
-            })
+            Err(())
         } else {
             self.clear_cell(col);
             self.clear_cell(col + 1);
@@ -357,9 +350,7 @@ mod test {
 
         row.write_narrow(2, "A".into(), style, None);
 
-        let error = row.write_wide(2, "猫".into(), style, None).unwrap_err();
-
-        assert_eq!(error, RowError::WideCellDoesNotFit { col: 2, len: 3 });
+        assert!(row.write_wide(2, "猫".into(), style, None).is_err());
 
         assert_eq!(row.cell(2).content, CellContent::Narrow("A".into()));
         assert_eq!(row.cell(2).style.fg, Color::Indexed(1));

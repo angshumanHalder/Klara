@@ -196,7 +196,7 @@ impl ApplicationHandler for App {
                         .grid
                         .lock()
                         .unwrap()
-                        .application_cursor;
+                        .application_cursor_keys();
                     match self.input.handle(&event, app_cursor) {
                         Action::SendBytes(bytes) => match wm.active.lock() {
                             Ok(mut pane) => {

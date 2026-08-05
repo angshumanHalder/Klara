@@ -182,8 +182,10 @@ mod test {
 
     #[test]
     fn a_style_can_hold_several_flags() {
-        let mut style = CellStyle::default();
-        style.flags = CellFlags::BOLD | CellFlags::ITALIC | CellFlags::BLINK;
+        let style = CellStyle {
+            flags: CellFlags::BOLD | CellFlags::ITALIC | CellFlags::BLINK,
+            ..CellStyle::default()
+        };
 
         assert!(style.flags.contains(CellFlags::BOLD));
         assert!(style.flags.contains(CellFlags::ITALIC));

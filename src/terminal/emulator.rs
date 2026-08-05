@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use crate::terminal::cell::{CellFlags, CellStyle, HyperlinkId, UnderlineStyle};
+use crate::terminal::mode::TerminalModes;
 use crate::terminal::screen::{Cursor, Screen};
 
 use super::TerminalError;
@@ -36,13 +37,11 @@ pub struct Terminal {
     active_hyperlink: Option<HyperlinkId>,
     hyperlinks: Vec<Hyperlink>,
     scroll_region: Range<usize>,
+    modes: TerminalModes,
 
     pub rows: usize,
     pub cols: usize,
     pub cursor_style: CursorStyle,
-    pub cursor_visible: bool,
-    pub application_cursor: bool,
-    pub sgr_mouse: bool,
     pub dirty: Vec<bool>,
 }
 
@@ -59,10 +58,8 @@ impl Terminal {
             hyperlinks: Vec::new(),
             scroll_region: 0..rows,
             cursor_style: CursorStyle::Block,
-            application_cursor: false,
-            sgr_mouse: false,
-            cursor_visible: true,
             dirty: vec![true; rows],
+            modes: TerminalModes::default(),
         }
     }
 
@@ -107,23 +104,14 @@ impl Terminal {
             );
             self.dirty[row] = true;
         }
-        let rows = self.rows;
         let cols = self.cols;
-        let mut should_scroll = false;
         {
             let cursor = self.cursor_mut();
             cursor.col += 1;
             if cursor.col >= cols {
                 cursor.col = 0;
-                cursor.row += 1;
-                if cursor.row >= rows {
-                    cursor.row = rows - 1;
-                    should_scroll = true;
-                }
+                self.line_feed();
             }
-        }
-        if should_scroll {
-            self.scroll_up();
         }
     }
 
@@ -213,8 +201,7 @@ impl Terminal {
 
     fn apply_sgr(&mut self, params: &Params) {
         let mut iter = params.iter();
-        loop {
-            let Some(param) = iter.next() else { break };
+        while let Some(param) = iter.next() {
             match param[0] {
                 0 => {
                     self.current_style = CellStyle::default();
@@ -371,6 +358,10 @@ impl Terminal {
             cursor.row += 1;
         }
     }
+
+    pub fn application_cursor_keys(&self) -> bool {
+        self.modes.application_cursor_keys
+    }
 }
 
 fn parse_sgr_color(param: &[u16], iter: &mut ParamsIter<'_>) -> Option<Color> {
@@ -410,7 +401,7 @@ impl Perform for Terminal {
 
     fn execute(&mut self, byte: u8) {
         match byte {
-            0x0a | 0x0b | 0x0c => {
+            0x0a..=0x0c => {
                 self.line_feed();
             }
             0x0d => self.cursor_mut().col = 0,
@@ -455,22 +446,24 @@ impl Perform for Terminal {
             'K' => self.erase_line(p0),
             'm' => self.apply_sgr(params),
             'h' if intermediates == [b'?'] => match p0 {
-                25 => self.cursor_visible = true,
-                1 => self.application_cursor = true,
-                1006 => self.sgr_mouse = true,
+                7 => self.modes.auto_wrap = true,
+                25 => self.modes.cursor_visible = true,
+                1 => self.modes.application_cursor_keys = true,
+                1006 => self.modes.sgr_mouse = true,
                 1049 => self.enter_alternate_screen(),
                 _ => {}
             },
             'l' if intermediates == [b'?'] => match p0 {
-                25 => self.cursor_visible = false,
-                1 => self.application_cursor = false,
-                1006 => self.sgr_mouse = false,
+                7 => self.modes.auto_wrap = false,
+                25 => self.modes.cursor_visible = false,
+                1 => self.modes.application_cursor_keys = false,
+                1006 => self.modes.sgr_mouse = false,
                 1049 => self.leave_alternate_screen(),
                 _ => {}
             },
             'q' if intermediates == [b' '] => {
                 self.cursor_style = match p0 {
-                    0 | 1 | 2 => CursorStyle::Block,
+                    0..=2 => CursorStyle::Block,
                     3 | 4 => CursorStyle::Underline,
                     5 | 6 => CursorStyle::Bar,
                     _ => CursorStyle::Block,

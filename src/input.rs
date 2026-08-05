@@ -10,11 +10,14 @@ pub enum Action {
     None,
 }
 
+#[derive(Default)]
 enum PrefixState {
+    #[default]
     Idle,
     Waiting,
 }
 
+#[derive(Default)]
 pub struct InputHandler {
     state: PrefixState,
     pub modifiers: Modifiers,
@@ -22,10 +25,7 @@ pub struct InputHandler {
 
 impl InputHandler {
     pub fn new() -> Self {
-        Self {
-            state: PrefixState::Idle,
-            modifiers: Modifiers::default(),
-        }
+        Self::default()
     }
 
     pub fn handle(&mut self, event: &KeyEvent, app_cursor: bool) -> Action {

@@ -3,6 +3,7 @@ use thiserror::Error;
 pub mod cell;
 pub use emulator::{CursorStyle, Terminal};
 mod emulator;
+mod mode;
 mod row;
 mod screen;
 

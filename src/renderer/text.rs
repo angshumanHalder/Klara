@@ -7,7 +7,7 @@ use crate::{layout::Rect, pane::Pane, terminal::cell::Color as TermColor};
 use bytemuck::{Pod, Zeroable};
 use glyphon::{
     Attrs, Buffer as TextBuffer, Cache, Color as GColor, Family, FontSystem, Metrics, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, fontdb,
+    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use wgpu::{
     BlendState, BufferAddress, BufferDescriptor, BufferUsages, ColorTargetState, ColorWrites,
@@ -100,7 +100,6 @@ pub struct Renderer {
     bg_buf: wgpu::Buffer,
     screen_w: f32,
     screen_h: f32,
-    font_id: fontdb::ID,
     pane_cache: HashMap<usize, Vec<CachedRow>>,
 }
 
@@ -113,13 +112,6 @@ impl Renderer {
         screen_h: u32,
     ) -> Self {
         let font_system = FontSystem::new();
-        let font_id = font_system
-            .db()
-            .query(&fontdb::Query {
-                families: &[fontdb::Family::Name("JetBrains Mono")],
-                ..Default::default()
-            })
-            .expect("JetBrains Mono not found in system fonts");
         let swash_cache = SwashCache::new();
 
         let cache = Cache::new(device);
@@ -189,7 +181,6 @@ impl Renderer {
             text_renderer,
             bg_pipeline,
             bg_buf,
-            font_id,
             screen_w: screen_w as f32,
             screen_h: screen_h as f32,
             pane_cache: HashMap::new(),
@@ -237,7 +228,7 @@ impl Renderer {
             let pane = pane_arc.lock().unwrap();
             let mut grid = pane.grid.lock().unwrap();
 
-            let cache = pane_cache.entry(pane_id).or_insert_with(Vec::new);
+            let cache = pane_cache.entry(pane_id).or_default();
             while cache.len() < grid.rows {
                 cache.push(CachedRow {
                     buf: TextBuffer::new(&mut *font_system, Metrics::new(FONT_SIZE, LINE_HEIGHT)),
@@ -245,9 +236,8 @@ impl Renderer {
                 });
             }
 
-            for row_idx in 0..grid.rows {
+            for (row_idx, cached_row) in cache.iter_mut().enumerate().take(grid.rows) {
                 let y = rect.y + row_idx as f32 * LINE_HEIGHT;
-                let cached_row = &mut cache[row_idx];
 
                 if grid.dirty[row_idx] {
                     cached_row.bg_verts.clear();
@@ -297,12 +287,9 @@ impl Renderer {
                         .map(|(range, c)| (&text[range.clone()], default_attrs.color(*c)))
                         .collect();
 
-                    cached_row.buf.set_rich_text(
-                        font_system,
-                        spans.into_iter(),
-                        default_attrs,
-                        Shaping::Basic,
-                    );
+                    cached_row
+                        .buf
+                        .set_rich_text(font_system, spans, default_attrs, Shaping::Basic);
                     cached_row.buf.shape_until_scroll(font_system, false);
                     grid.dirty[row_idx] = false;
                 }

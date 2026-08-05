@@ -26,34 +26,23 @@ pub enum ConfigError {
     Invalid { field: &'static str, reason: String },
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct FontConfig {
-    pub family: String,
-    pub size: f32,
-}
-
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct WindowConfig {
     pub opacity: f32,
-    pub blur: bool,
     pub width: u32,
     pub height: u32,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct ThemeConfig {
     pub background: String,
-    pub foreground: String,
-    pub accent: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub font: FontConfig,
     pub window: WindowConfig,
     pub theme: ThemeConfig,
 }
@@ -77,20 +66,6 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.font.family.trim().is_empty() {
-            return Err(ConfigError::Invalid {
-                field: "font.family",
-                reason: "must not be empty".into(),
-            });
-        }
-
-        if !self.font.size.is_finite() || self.font.size <= 0.0 {
-            return Err(ConfigError::Invalid {
-                field: "font.size",
-                reason: "must be a finite number greater than  zero".into(),
-            });
-        }
-
         if self.window.width == 0 {
             return Err(ConfigError::Invalid {
                 field: "window.width",
@@ -113,8 +88,6 @@ impl Config {
         }
 
         validate_hex_color("theme.background", &self.theme.background)?;
-        validate_hex_color("theme.foreground", &self.theme.foreground)?;
-        validate_hex_color("theme.accent", &self.theme.accent)?;
 
         Ok(())
     }
@@ -181,27 +154,18 @@ mod tests {
         write!(
             f,
             r##"
-[font]
-family = "Fira Code"
-size = 16.0
-
 [window]
 opacity = 0.8
-blur = true
 width = 800
 height = 60
 
 [theme]
 background = "#000000"
-foreground = "#ffffff"
-accent = "#ff0000"
 "##
         )
         .unwrap();
 
         let cfg = Config::load(f.path().to_str().unwrap()).unwrap();
-        assert_eq!(cfg.font.family, "Fira Code");
-        assert_eq!(cfg.font.size, 16.0);
         assert_eq!(cfg.window.opacity, 0.8);
         assert_eq!(cfg.theme.background, "#000000");
     }
@@ -215,34 +179,6 @@ accent = "#ff0000"
     fn missing_file_returns_read_error() {
         let error = Config::load("/nonexistent/path/config.toml").unwrap_err();
         assert!(matches!(error, ConfigError::Read { .. }));
-    }
-
-    #[test]
-    fn rejects_empty_font_family() {
-        let mut config = valid_config();
-        config.font.family = "   ".into();
-
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::Invalid {
-                field: "font.family",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn rejects_invalid_font_size() {
-        let mut config = valid_config();
-        config.font.size = 0.0;
-
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::Invalid {
-                field: "font.size",
-                ..
-            })
-        ));
     }
 
     #[test]
@@ -289,21 +225,14 @@ accent = "#ff0000"
         write!(
             file,
             r##"
-[font]
-family = "Fira Code"
-size = 16.0
-unexpected = true
-
 [window]
 opacity = 0.8
-blur = true
 width = 800
 height = 60
+unexpected = true
 
 [theme]
 background = "#000000"
-foreground = "#ffffff"
-accent = "#ff0000"
 "##,
         )
         .unwrap();
