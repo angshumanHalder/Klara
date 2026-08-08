@@ -24,10 +24,6 @@ pub struct InputHandler {
 }
 
 impl InputHandler {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn handle(&mut self, event: &KeyEvent, app_cursor: bool) -> Action {
         if event.state != ElementState::Pressed {
             return Action::None;

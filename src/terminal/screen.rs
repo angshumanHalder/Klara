@@ -6,14 +6,16 @@ pub(super) struct Screen {
     rows: Vec<Row>,
     cursor: Cursor,
     saved_cursor: Cursor,
+    pub(super) pending_wrap: bool,
 }
 
 impl Screen {
     pub(super) fn new(rows: usize, cols: usize) -> Self {
         Self {
-            rows: new_buffer(rows, cols),
+            rows: (0..rows).map(|_| Row::new(cols)).collect(),
             cursor: Cursor::default(),
             saved_cursor: Cursor::default(),
+            pending_wrap: false,
         }
     }
 
@@ -76,11 +78,8 @@ impl Screen {
 
     pub(super) fn reset_cursor(&mut self) {
         self.cursor = Cursor::default();
+        self.pending_wrap = false;
     }
-}
-
-fn new_buffer(rows: usize, cols: usize) -> Vec<Row> {
-    (0..rows).map(|_| Row::new(cols)).collect()
 }
 
 fn resize_buffer(buffer: &mut Vec<Row>, new_rows: usize, new_cols: usize) {
@@ -201,5 +200,21 @@ mod test {
             screen.rows[3].cell(0).content,
             CellContent::Narrow("D".into())
         );
+    }
+
+    #[test]
+    fn new_screen_has_pending_wrap_false() {
+        let screen = Screen::new(4, 2);
+        assert!(!screen.pending_wrap);
+    }
+
+    #[test]
+    fn reset_cursor_clears_pending_wrap() {
+        let mut screen = Screen::new(4, 2);
+        screen.pending_wrap = true;
+        assert!(screen.pending_wrap);
+
+        screen.reset_cursor();
+        assert!(!screen.pending_wrap);
     }
 }

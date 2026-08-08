@@ -38,6 +38,7 @@ pub struct Terminal {
     hyperlinks: Vec<Hyperlink>,
     scroll_region: Range<usize>,
     modes: TerminalModes,
+    tab_stops: Vec<bool>,
 
     pub rows: usize,
     pub cols: usize,
@@ -60,6 +61,7 @@ impl Terminal {
             cursor_style: CursorStyle::Block,
             dirty: vec![true; rows],
             modes: TerminalModes::default(),
+            tab_stops: (0..cols).map(|idx| idx != 0 && idx % 8 == 0).collect(),
         }
     }
 
@@ -73,6 +75,13 @@ impl Terminal {
 
         if new_rows == self.rows && new_cols == self.cols {
             return Ok(());
+        }
+
+        if new_cols > self.cols {
+            let extension = (self.cols..new_cols).map(|idx| idx % 8 == 0);
+            self.tab_stops.extend(extension);
+        } else {
+            self.tab_stops.truncate(new_cols);
         }
 
         self.primary.resize(new_rows, new_cols);
@@ -90,11 +99,21 @@ impl Terminal {
     }
 
     pub fn put_char(&mut self, ch: char) {
+        let style = self.current_style;
+        let hyperlink = self.active_hyperlink;
+
+        if self.active_screen().pending_wrap && self.modes.auto_wrap {
+            self.active_screen_mut().pending_wrap = false;
+            self.cursor_mut().col = 0;
+            self.line_feed();
+        } else if !self.modes.auto_wrap {
+            self.active_screen_mut().pending_wrap = false;
+        }
+
         let cursor = self.active_screen().cursor();
         let row = cursor.row;
         let col = cursor.col;
-        let style = self.current_style;
-        let hyperlink = self.active_hyperlink;
+
         if row < self.rows && col < self.cols {
             self.active_screen_mut().row_mut(row).write_narrow(
                 col,
@@ -104,14 +123,12 @@ impl Terminal {
             );
             self.dirty[row] = true;
         }
-        let cols = self.cols;
-        {
-            let cursor = self.cursor_mut();
-            cursor.col += 1;
-            if cursor.col >= cols {
-                cursor.col = 0;
-                self.line_feed();
-            }
+        if col == self.cols - 1 {
+            self.cursor_mut().col = col;
+            self.active_screen_mut().pending_wrap = self.modes.auto_wrap;
+        } else {
+            self.cursor_mut().col += 1;
+            self.active_screen_mut().pending_wrap = false;
         }
     }
 

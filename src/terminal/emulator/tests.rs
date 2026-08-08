@@ -233,14 +233,6 @@ fn resizing_to_same_dimensions_is_a_noop() {
 }
 
 #[test]
-fn put_char_creates_narrow_content() {
-    let mut term = Terminal::new(2, 2);
-    term.put_char('A');
-
-    assert_eq!(term.cell(0, 0).content, CellContent::Narrow("A".into()));
-}
-
-#[test]
 fn erasing_wide_continuation_erases_wide_leading() {
     let mut term = Terminal::new(2, 4);
     let style = CellStyle::default();
@@ -847,15 +839,17 @@ fn wrapping_at_bottom_margin_scrolls_region() {
     term.cursor_mut().col = 1;
     term.scroll_region = 1..3;
     term.put_char('Z');
+    term.put_char('Y');
 
     assert_eq!(term.cell(0, 0).content, CellContent::Narrow("A".into()));
     assert_eq!(term.cell(1, 0).content, CellContent::Narrow("C".into()));
     assert_eq!(term.cell(1, 1).content, CellContent::Narrow("Z".into()));
-    assert_eq!(term.cell(2, 0).content, CellContent::Empty);
+    assert_eq!(term.cell(2, 0).content, CellContent::Narrow("Y".into()));
     assert_eq!(term.cell(3, 0).content, CellContent::Narrow("D".into()));
 
     assert_eq!(term.cursor_row(), 2);
-    assert_eq!(term.cursor_col(), 0);
+    assert_eq!(term.cursor_col(), 1);
+    assert!(!term.active_screen().pending_wrap);
 }
 
 #[test]
@@ -871,4 +865,58 @@ fn decawm_can_be_disabled_and_reenabled() {
         parser.advance(&mut term, b);
     }
     assert!(term.modes.auto_wrap);
+}
+
+#[test]
+fn disabled_decawm_overwrites_the_last_column() {
+    let mut term = Terminal::new(2, 2);
+    let mut parser = Parser::new();
+
+    for &byte in b"\x1b[?7l" {
+        parser.advance(&mut term, byte);
+    }
+
+    term.put_char('A');
+    term.put_char('B');
+    term.put_char('C');
+
+    assert_eq!(term.cell(0, 0).content, CellContent::Narrow("A".into()));
+    assert_eq!(term.cell(0, 1).content, CellContent::Narrow("C".into()));
+    assert_eq!(term.cursor_row(), 0);
+    assert_eq!(term.cursor_col(), 1);
+}
+
+#[test]
+fn default_tab_stops_are_initialized_every_eight_columns() {
+    let term = Terminal::new(1, 10);
+    assert!(!term.tab_stops[7]);
+    assert!(term.tab_stops[8]);
+    assert!(!term.tab_stops[9]);
+}
+
+#[test]
+fn resizing_preserves_existing_stops_and_initialize_new_stops() {
+    let mut term = Terminal::new(1, 10);
+    assert!(!term.tab_stops[0]);
+    assert!(!term.tab_stops[7]);
+    assert!(term.tab_stops[8]);
+
+    term.resize(2, 20).unwrap();
+
+    assert_eq!(term.tab_stops.len(), 20);
+    assert!(!term.tab_stops[15]);
+    assert!(term.tab_stops[16]);
+}
+
+#[test]
+fn printing_at_last_column_sets_pending_wrap() {
+    let mut term = Terminal::new(2, 2);
+    term.put_char('A');
+    term.put_char('B');
+
+    assert_eq!(term.cursor_row(), 0);
+    assert_eq!(term.cursor_col(), 1);
+
+    assert!(term.active_screen().pending_wrap);
+    assert!(term.active_screen().row(1).is_blank());
 }

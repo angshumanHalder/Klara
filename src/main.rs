@@ -37,7 +37,7 @@ impl App {
             config,
             window: None,
             surface_state: None,
-            input: InputHandler::new(),
+            input: InputHandler::default(),
             wm: None,
             renderer: None,
         }
