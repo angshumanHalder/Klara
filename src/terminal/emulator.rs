@@ -51,8 +51,8 @@ impl Terminal {
         Terminal {
             rows,
             cols,
-            primary: Screen::new(rows, cols),
-            alternate: Screen::new(rows, cols),
+            primary: Screen::new(rows, cols, 10_000),
+            alternate: Screen::new(rows, cols, 0),
             active_screen: ScreenKind::Primary,
             current_style: CellStyle::default(),
             active_hyperlink: None,
@@ -146,6 +146,16 @@ impl Terminal {
 
     pub fn cursor_col(&self) -> usize {
         self.active_screen().cursor().col
+    }
+
+    pub fn scroll_viewport_up(&mut self, lines: usize) {
+        self.active_screen_mut().scroll_viewport_up(lines);
+        self.dirty[0..self.rows].fill(true);
+    }
+
+    pub fn scroll_viewport_down(&mut self, lines: usize) {
+        self.active_screen_mut().scroll_viewport_down(lines);
+        self.dirty.fill(true);
     }
 
     fn scroll_up(&mut self) {

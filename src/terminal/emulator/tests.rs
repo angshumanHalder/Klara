@@ -920,3 +920,67 @@ fn printing_at_last_column_sets_pending_wrap() {
     assert!(term.active_screen().pending_wrap);
     assert!(term.active_screen().row(1).is_blank());
 }
+
+#[test]
+fn default_terminal_primary_screen_nonzero_limit() {
+    let term = Terminal::new(4, 2);
+    assert_eq!(term.active_screen().scrollback_limit, 10_000);
+}
+
+#[test]
+fn default_terminal_alternate_screen_zero_limit() {
+    let mut term = Terminal::new(4, 2);
+    term.enter_alternate_screen();
+    assert_eq!(term.active_screen().scrollback_limit, 0);
+}
+
+#[test]
+fn alternate_screen_does_not_modify_primary_history() {
+    let mut term = Terminal::new(2, 1);
+    for ch in ['A', 'B', 'C'] {
+        term.put_char(ch);
+    }
+
+    assert_eq!(term.primary.history.len(), 1);
+    assert_eq!(
+        term.primary.history.front().unwrap().cell(0).content,
+        CellContent::Narrow("A".into())
+    );
+
+    term.enter_alternate_screen();
+    for ch in ['X', 'Y', 'Z'] {
+        term.put_char(ch);
+    }
+
+    assert!(term.alternate.history.is_empty());
+
+    term.leave_alternate_screen();
+    assert_eq!(term.primary.history.len(), 1);
+    assert_eq!(
+        term.primary.history.front().unwrap().cell(0).content,
+        CellContent::Narrow("A".into())
+    );
+}
+
+#[test]
+fn terminal_viewport_navigation_changes_visible_cells() {
+    let mut term = Terminal::new(3, 1);
+    for ch in ['A', 'B', 'C', 'D'].into_iter() {
+        term.put_char(ch);
+    }
+    term.dirty.fill(false);
+    term.scroll_viewport_up(1);
+
+    assert_eq!(term.cell(0, 0).content, CellContent::Narrow("A".into()));
+    assert_eq!(term.cell(1, 0).content, CellContent::Narrow("B".into()));
+    assert_eq!(term.cell(2, 0).content, CellContent::Narrow("C".into()));
+    assert!(term.dirty.iter().all(|&d| d));
+
+    term.dirty.fill(false);
+
+    term.scroll_viewport_down(1);
+    assert_eq!(term.cell(0, 0).content, CellContent::Narrow("B".into()));
+    assert_eq!(term.cell(1, 0).content, CellContent::Narrow("C".into()));
+    assert_eq!(term.cell(2, 0).content, CellContent::Narrow("D".into()));
+    assert!(term.dirty.iter().all(|&d| d));
+}

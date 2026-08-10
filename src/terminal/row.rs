@@ -51,7 +51,6 @@ impl Row {
         self.cells.resize(new_cols, Cell::default());
     }
 
-    #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.cells.len()
     }
